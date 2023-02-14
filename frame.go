@@ -15,7 +15,8 @@ type frameHeader struct {
 
 const (
 	frameHeaderSize = 4 + 2 + 2
-	maxFrameSize    = math.MaxUint16 + frameHeaderSize
+	maxPayloadSize  = math.MaxUint16
+	maxFrameSize    = frameHeaderSize + maxPayloadSize
 )
 
 const (
@@ -51,20 +52,21 @@ func appendFrame(buf []byte, h frameHeader, payload []byte) []byte {
 }
 
 type frameReader struct {
-	r   io.Reader
-	buf []byte
+	reader  io.Reader
+	header  []byte
+	payload []byte
 }
 
-// nextFrame reads a frame from conn
+// nextFrame reads a frame from reader
 func (fr *frameReader) nextFrame() (frameHeader, []byte, error) {
 	// Read header
-	if _, err := io.ReadFull(fr.r, fr.buf[:frameHeaderSize]); err != nil {
+	if _, err := io.ReadFull(fr.reader, fr.header); err != nil {
 		return frameHeader{}, nil, fmt.Errorf("could not read frame header: %w", err)
 	}
-	h := decodeFrameHeader(fr.buf[:frameHeaderSize])
+	h := decodeFrameHeader(fr.header)
 
-	if _, err := io.ReadFull(fr.r, fr.buf[:h.length]); err != nil {
+	if _, err := io.ReadFull(fr.reader, fr.payload[:h.length]); err != nil {
 		return frameHeader{}, nil, fmt.Errorf("could not read frame payload: %w", err)
 	}
-	return h, fr.buf[:h.length], nil
+	return h, fr.payload[:h.length], nil
 }

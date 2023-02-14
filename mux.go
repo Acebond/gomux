@@ -83,10 +83,7 @@ func (m *Mux) bufferFrame(h frameHeader, payload []byte, deadline time.Time) err
 		defer timer.Stop()
 	}
 	// block until we can add the frame to the buffer
-	//buf := &m.writeBuf
-	maxBufSize := maxFrameSize * 10
-
-	for len(m.writeBuf)+frameHeaderSize+len(payload) > maxBufSize && m.err == nil && (deadline.IsZero() || time.Now().Before(deadline)) {
+	for len(m.writeBuf)+frameHeaderSize+len(payload) > cap(m.writeBuf) && m.err == nil && (deadline.IsZero() || time.Now().Before(deadline)) {
 		m.bufferCond.Wait()
 	}
 	if m.err != nil {
@@ -138,12 +135,7 @@ func (m *Mux) writeLoop() {
 	timer := time.AfterFunc(keepaliveInterval, m.cond.Broadcast)
 	defer timer.Stop()
 
-	// to avoid blocking bufferFrame while we Write, copy into a local buffer
-	//buf := make([]byte, maxFrameSize*10)
 	for {
-		// wait for frames
-		//writebuf := *m.writeBuf
-
 		m.mu.Lock()
 		for len(m.writeBuf) == 0 && m.err == nil && time.Now().Before(nextKeepalive) {
 			m.cond.Wait()
@@ -161,13 +153,10 @@ func (m *Mux) writeLoop() {
 			m.writeBuf = appendFrame(m.writeBuf[:0], frameHeader{id: idKeepalive}, nil)
 		}
 
-		// copy into a local buffer
-		// copy(buf, m.writeBuf)
-		// packets := buf[:len(m.writeBuf)]
-
-		// swap and wake at most one bufferFrame call
+		// to avoid blocking bufferFrame while we Write, swap writeBufA and writeBufB
 		m.writeBuf, m.sendBuf = m.sendBuf, m.writeBuf
 
+		// wake at most one bufferFrame call
 		m.bufferCond.Signal()
 		m.mu.Unlock()
 
@@ -182,8 +171,7 @@ func (m *Mux) writeLoop() {
 			return
 		}
 
-		// clear writeBuf
-		// m.writeBuf = m.writeBuf[:0]
+		// clear sendBuf
 		m.sendBuf = m.sendBuf[:0]
 
 	}
@@ -195,11 +183,11 @@ func (m *Mux) writeLoop() {
 // the Stream before attempting to Read again.
 func (m *Mux) readLoop() {
 	var curStream *Stream // saves a lock acquisition + map lookup in the common case
-	//frameBuf := make([]byte, maxFrameSize*10)
 
 	fr := &frameReader{
-		r:   m.conn,
-		buf: make([]byte, 0, maxFrameSize),
+		reader:  m.conn,
+		header:  make([]byte, frameHeaderSize),
+		payload: make([]byte, maxPayloadSize),
 	}
 
 	for {
