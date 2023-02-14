@@ -1,7 +1,7 @@
 //go:build !windows
 // +build !windows
 
-package mux
+package gomux
 
 import (
 	"errors"

@@ -1,10 +1,21 @@
-package mux
+package gomux
 
 import (
 	"encoding/binary"
 	"fmt"
 	"io"
 	"math"
+)
+
+type frameHeader struct {
+	id     uint32
+	length uint16
+	flags  uint16
+}
+
+const (
+	frameHeaderSize = 4 + 2 + 2
+	maxFrameSize    = math.MaxUint16 + frameHeaderSize
 )
 
 const (
@@ -17,15 +28,6 @@ const (
 	idKeepalive    = iota   // empty frame to keep connection open
 	idLowestStream = 1 << 8 // IDs below this value are reserved
 )
-
-type frameHeader struct {
-	id     uint32
-	length uint16
-	flags  uint16
-}
-
-const frameHeaderSize = 4 + 2 + 2
-const maxFrameSize = math.MaxUint16 + frameHeaderSize
 
 func encodeFrameHeader(buf []byte, h frameHeader) {
 	binary.LittleEndian.PutUint32(buf[0:], h.id)
@@ -56,13 +58,10 @@ type frameReader struct {
 // nextFrame reads a frame from conn
 func (fr *frameReader) nextFrame() (frameHeader, []byte, error) {
 	// Read header
-	//hdrBuf := make([]byte, frameHeaderSize)
 	if _, err := io.ReadFull(fr.r, fr.buf[:frameHeaderSize]); err != nil {
 		return frameHeader{}, nil, fmt.Errorf("could not read frame header: %w", err)
 	}
 	h := decodeFrameHeader(fr.buf[:frameHeaderSize])
-
-	//payload := make([]byte, h.length)
 
 	if _, err := io.ReadFull(fr.r, fr.buf[:h.length]); err != nil {
 		return frameHeader{}, nil, fmt.Errorf("could not read frame payload: %w", err)
