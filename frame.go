@@ -20,14 +20,10 @@ const (
 )
 
 const (
-	flagFirst = 1 << iota // first frame in stream
-	flagLast              // stream is being closed gracefully
-	flagError             // stream is being closed due to an error
-)
-
-const (
-	idKeepalive    = iota   // empty frame to keep connection open
-	idLowestStream = 1 << 8 // IDs below this value are reserved
+	flagFirst     = 1 << iota // first frame in stream
+	flagLast                  // stream is being closed gracefully
+	flagError                 // stream is being closed due to an error
+	flagKeepalive             // empty frame to keep connection open
 )
 
 func encodeFrameHeader(buf []byte, h frameHeader) {
@@ -59,7 +55,6 @@ type frameReader struct {
 
 // nextFrame reads a frame from reader
 func (fr *frameReader) nextFrame() (frameHeader, []byte, error) {
-	// Read header
 	if _, err := io.ReadFull(fr.reader, fr.header); err != nil {
 		return frameHeader{}, nil, fmt.Errorf("could not read frame header: %w", err)
 	}

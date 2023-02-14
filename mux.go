@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math"
 	"net"
 	"os"
 	"sync"
@@ -150,7 +149,7 @@ func (m *Mux) writeLoop() {
 		// NOTE: even if we were woken by the keepalive timer, there might be a
 		// normal frame ready to send, in which case we don't need a keepalive
 		if len(m.writeBuf) == 0 {
-			m.writeBuf = appendFrame(m.writeBuf[:0], frameHeader{id: idKeepalive}, nil)
+			m.writeBuf = appendFrame(m.writeBuf[:0], frameHeader{flags: flagKeepalive}, nil)
 		}
 
 		// to avoid blocking bufferFrame while we Write, swap writeBufA and writeBufB
@@ -197,12 +196,11 @@ func (m *Mux) readLoop() {
 			m.setErr(err)
 			return
 		}
-		if h.id == idKeepalive {
+
+		if h.flags&flagKeepalive == flagKeepalive {
 			continue // no action required
-		} else if h.id < idLowestStream {
-			m.setErr(fmt.Errorf("peer sent invalid frame ID (%v) (length=%v, flags=%v)", h.id, h.length, h.flags))
-			return
 		}
+
 		// look for matching Stream
 		if curStream == nil || h.id != curStream.id {
 			m.mu.Lock()
@@ -289,14 +287,8 @@ func (m *Mux) DialStream() *Stream {
 		err:         m.err, // stream is unusable if m.err is set
 	}
 	m.streams[s.id] = s
+	// nextID will wraparound when it grows too large
 	m.nextID += 2
-	// wraparound when nextID grows too large
-	if m.nextID >= math.MaxUint32>>2 {
-		m.nextID = idLowestStream + m.nextID&1 // preserve dial/accept bit
-		// NOTE: the above assumes that idLowestStream & 1 == 0, which we enforce
-		// at compile time using the following declaration:
-		var _ [idLowestStream & 1]struct{} = [0]struct{}{}
-	}
 	return s
 }
 
@@ -305,7 +297,6 @@ func newMux(conn net.Conn) *Mux {
 	m := &Mux{
 		conn:      conn,
 		streams:   make(map[uint32]*Stream),
-		nextID:    idLowestStream,
 		writeBufA: make([]byte, 0, maxFrameSize*10),
 		writeBufB: make([]byte, 0, maxFrameSize*10),
 	}
