@@ -7,6 +7,7 @@ import (
 	"math"
 	"net"
 	"os"
+	"runtime/pprof"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -577,7 +578,11 @@ func BenchmarkMux(b *testing.B) {
 			wg.Wait()
 			b.ReportMetric(float64(b.N*numStreams)/time.Since(start).Seconds(), "frames/sec")
 		})
+
 	}
+	f, _ := os.Create("heap.out")
+	pprof.WriteHeapProfile(f)
+	f.Close()
 }
 
 /*

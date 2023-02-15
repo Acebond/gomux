@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"errors"
 	"io"
-	"math"
 	"net"
 	"os"
 	"sync"
@@ -144,7 +143,7 @@ func (s *Stream) Write(p []byte) (int, error) {
 			return len(p) - buf.Len(), err
 		}
 		// write next frame's worth of data
-		payload := buf.Next(math.MaxUint16)
+		payload := buf.Next(maxPayloadSize)
 		h := frameHeader{
 			id:     s.id,
 			length: uint16(len(payload)),
