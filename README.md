@@ -5,13 +5,13 @@ Gomux is a high-performance stream multiplexer forked from [SiaMux](https://gith
 ## Benchmark
 Gomux on an i5-13600K can transfer approximately 4500 MB/s. The number of streams does not impact performance. 
 
-The benchmark below does show slightly better throughput with a larger (1000+) number of streams. This is because having more readers/writers means less time is spent blocking waiting for data to be read or written to the streams.
+The benchmark below does show slightly better throughput with a larger (100+) number of streams. This is because having more readers/writers means less time is spent blocking waiting for data to be read or written to the streams.
 
 Profiling the benchmark showed that 9.62s (80.10%) of time was spent inside the WSARecv() and WSASend() syscalls. This indicates that the majority of time is spent waiting for the OS (in this case Windows) kernel to process the reads and writes to the underlying (in this case TCP) connection. These functions are likely implemented to be very performant, and are simply blocked due to the bandwidth of the underlying connection being maxed out. 
 
 The conclusion is that the performance will be limited by the throughput of the underlying connection.
 
-Keep in mind that the Golang garbage collector pauses can cause different results in benchmarks. The same benchmark run multiple times can sometimes show a lower transfer speed due to a lucky garbage collector pause. 
+Keep in mind that the Golang garbage collector pauses can cause different results in benchmarks. The same benchmark run multiple times can sometimes show a lower transfer speed due to an unlucky garbage collector pause.
 
 ```
 PS C:\Users\acebond\go\src\github.com\Acebond\gomux> go test -bench=BenchmarkMux
@@ -46,7 +46,7 @@ A frame consists of a *frame header* followed by a payload. A header is:
 |   2    | uint16 | Payload length |
 |   2    | uint16 | Flags          |
 
-The ID specifies which *stream* a frame belongs to. Streams are numbered sequentially, starting at 0. To prevent collisions, streams initiated by the dialing peer use even IDs, while the accepting peer uses odd IDs.
+The ID specifies which *stream* a frame belongs to. Streams are numbered sequentially, starting at 0. To prevent collisions, streams initiated by the client peer use even IDs, while the server peer uses odd IDs.
 
 The payload length specifies the length of the payload.
 

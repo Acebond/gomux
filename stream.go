@@ -13,14 +13,13 @@ import (
 // A Stream is a duplex connection multiplexed over a net.Conn. It implements
 // the net.Conn interface.
 type Stream struct {
-	m           *Mux
-	id          uint32
-	needAccept  bool      // managed by Mux
-	cond        sync.Cond // guards + synchronizes subsequent fields
-	established bool      // has the first frame been sent?
-	err         error
-	readBuf     []byte
-	rd, wd      time.Time // deadlines
+	m          *Mux
+	id         uint32
+	needAccept bool      // managed by Mux
+	cond       sync.Cond // guards + synchronizes subsequent fields
+	err        error
+	readBuf    []byte
+	rd, wd     time.Time // deadlines
 }
 
 // LocalAddr returns the underlying connection's LocalAddr.
@@ -98,10 +97,7 @@ func (s *Stream) consumeFrame(h frameHeader, payload []byte) {
 func (s *Stream) Read(p []byte) (int, error) {
 	s.cond.L.Lock()
 	defer s.cond.L.Unlock()
-	if !s.established {
-		// developer error: peer doesn't know this Stream exists yet
-		panic("mux: Read called before Write on newly-Dialed Stream")
-	}
+
 	if !s.rd.IsZero() {
 		if !time.Now().Before(s.rd) {
 			return 0, os.ErrDeadlineExceeded
@@ -134,10 +130,6 @@ func (s *Stream) Write(p []byte) (int, error) {
 		s.cond.L.Lock()
 		err := s.err
 		var flags uint16
-		if err == nil && !s.established {
-			flags = flagFirst
-			s.established = true
-		}
 		s.cond.L.Unlock()
 		if err != nil {
 			return len(p) - buf.Len(), err

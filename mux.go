@@ -223,11 +223,10 @@ func (m *Mux) readLoop() {
 					return
 				}
 				curStream = &Stream{
-					m:           m,
-					id:          h.id,
-					needAccept:  true,
-					cond:        sync.Cond{L: new(sync.Mutex)},
-					established: true,
+					m:          m,
+					id:         h.id,
+					needAccept: true,
+					cond:       sync.Cond{L: new(sync.Mutex)},
 				}
 				m.streams[h.id] = curStream
 				m.cond.Broadcast() // wake (*Mux).AcceptStream
@@ -271,25 +270,31 @@ func (m *Mux) AcceptStream() (*Stream, error) {
 	}
 }
 
-// DialStream creates a new Stream.
-//
-// Unlike e.g. net.Dial, this does not perform any I/O; the peer will not be
-// aware of the new Stream until Write is called.
-func (m *Mux) DialStream() *Stream {
+// OpenStream creates a new Stream.
+func (m *Mux) OpenStream() (*Stream, error) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
+
 	s := &Stream{
-		m:           m,
-		id:          m.nextID,
-		needAccept:  false,
-		cond:        sync.Cond{L: new(sync.Mutex)},
-		established: false,
-		err:         m.err, // stream is unusable if m.err is set
+		m:          m,
+		id:         m.nextID,
+		needAccept: false,
+		cond:       sync.Cond{L: new(sync.Mutex)},
+		err:        m.err, // stream is unusable if m.err is set
 	}
 	m.streams[s.id] = s
+
 	// nextID will wraparound when it grows too large
 	m.nextID += 2
-	return s
+	m.mu.Unlock()
+
+	// send First frame to tell peer the stream exists
+	h := frameHeader{
+		id:     s.id,
+		length: 0,
+		flags:  flagFirst,
+	}
+
+	return s, s.m.bufferFrame(h, nil, s.wd)
 }
 
 // newMux initializes a Mux and spawns its readLoop and writeLoop goroutines.
@@ -311,7 +316,7 @@ func newMux(conn net.Conn) *Mux {
 }
 
 // Dial initiates a mux protocol handshake on the provided conn.
-func Dial(conn net.Conn) (*Mux, error) {
+func Client(conn net.Conn) (*Mux, error) {
 	return newMux(conn), nil
 }
 
@@ -322,8 +327,8 @@ func Dial(conn net.Conn) (*Mux, error) {
 //
 // Unlike e.g. net.Dial, this does not perform any I/O; the peer will not be
 // aware of the new Stream until Write is called.
-func (m *Mux) DialStreamContext(ctx context.Context) *Stream {
-	s := m.DialStream()
+func (m *Mux) OpenStreamContext(ctx context.Context) (*Stream, error) {
+	s, err := m.OpenStream()
 	go func() {
 		<-ctx.Done()
 		s.cond.L.Lock()
@@ -333,11 +338,11 @@ func (m *Mux) DialStreamContext(ctx context.Context) *Stream {
 			s.cond.Broadcast()
 		}
 	}()
-	return s
+	return s, err
 }
 
 // Accept reciprocates a mux protocol handshake on the provided conn.
-func Accept(conn net.Conn) (*Mux, error) {
+func Server(conn net.Conn) (*Mux, error) {
 	m := newMux(conn)
 	m.nextID++ // avoid collisions with Dialing peer
 	return m, nil
