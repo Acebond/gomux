@@ -129,7 +129,6 @@ func (s *Stream) Write(p []byte) (int, error) {
 		// check for error
 		s.cond.L.Lock()
 		err := s.err
-		var flags uint16
 		s.cond.L.Unlock()
 		if err != nil {
 			return len(p) - buf.Len(), err
@@ -139,7 +138,7 @@ func (s *Stream) Write(p []byte) (int, error) {
 		h := frameHeader{
 			id:     s.id,
 			length: uint16(len(payload)),
-			flags:  flags,
+			flags:  0,
 		}
 		err = s.m.bufferFrame(h, payload, s.wd)
 		if err != nil {
