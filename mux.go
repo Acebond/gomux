@@ -3,7 +3,6 @@ package gomux
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net"
 	"os"
 	"sync"
@@ -29,6 +28,7 @@ var (
 // A Mux multiplexes multiple duplex Streams onto a single net.Conn.
 type Mux struct {
 	conn       net.Conn
+	acceptChan chan *Stream
 	mu         sync.Mutex // all subsequent fields are guarded by mu
 	cond       sync.Cond
 	streams    map[uint32]*Stream
@@ -64,6 +64,7 @@ func (m *Mux) setErr(err error) error {
 		s.cond.L.Unlock()
 	}
 	m.conn.Close()
+	close(m.acceptChan)
 	m.cond.Broadcast()
 	m.bufferCond.Broadcast()
 	return err
@@ -216,20 +217,17 @@ func (m *Mux) readLoop() {
 					continue
 				}
 				// create a new stream
-				const maxStreams = 1 << 20
-				if len(m.streams) > maxStreams {
-					m.mu.Unlock()
-					m.setErr(fmt.Errorf("exceeded concurrent stream limit (%v streams)", maxStreams))
-					return
-				}
 				curStream = &Stream{
-					m:          m,
-					id:         h.id,
-					needAccept: true,
-					cond:       sync.Cond{L: new(sync.Mutex)},
+					m:  m,
+					id: h.id,
+					// needAccept: true,
+					cond: sync.Cond{L: new(sync.Mutex)},
 				}
 				m.streams[h.id] = curStream
-				m.cond.Broadcast() // wake (*Mux).AcceptStream
+
+				// m.cond.Broadcast() // wake (*Mux).AcceptStream
+				m.acceptChan <- curStream
+
 			}
 			m.mu.Unlock()
 		}
@@ -254,20 +252,12 @@ func (m *Mux) Close() error {
 
 // AcceptStream waits for and returns the next peer-initiated Stream.
 func (m *Mux) AcceptStream() (*Stream, error) {
+	if s, ok := <-m.acceptChan; ok {
+		return s, nil
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	for {
-		if m.err != nil {
-			return nil, m.err
-		}
-		for _, s := range m.streams {
-			if s.needAccept {
-				s.needAccept = false
-				return s, nil
-			}
-		}
-		m.cond.Wait()
-	}
+	return nil, m.err
 }
 
 // OpenStream creates a new Stream.
@@ -275,11 +265,11 @@ func (m *Mux) OpenStream() (*Stream, error) {
 	m.mu.Lock()
 
 	s := &Stream{
-		m:          m,
-		id:         m.nextID,
-		needAccept: false,
-		cond:       sync.Cond{L: new(sync.Mutex)},
-		err:        m.err, // stream is unusable if m.err is set
+		m:  m,
+		id: m.nextID,
+		//needAccept: false,
+		cond: sync.Cond{L: new(sync.Mutex)},
+		err:  m.err, // stream is unusable if m.err is set
 	}
 	m.streams[s.id] = s
 
@@ -300,10 +290,11 @@ func (m *Mux) OpenStream() (*Stream, error) {
 // newMux initializes a Mux and spawns its readLoop and writeLoop goroutines.
 func newMux(conn net.Conn) *Mux {
 	m := &Mux{
-		conn:      conn,
-		streams:   make(map[uint32]*Stream),
-		writeBufA: make([]byte, 0, maxFrameSize*10),
-		writeBufB: make([]byte, 0, maxFrameSize*10),
+		conn:       conn,
+		streams:    make(map[uint32]*Stream),
+		acceptChan: make(chan *Stream, 128),
+		writeBufA:  make([]byte, 0, maxFrameSize*10),
+		writeBufB:  make([]byte, 0, maxFrameSize*10),
 	}
 	m.writeBuf = m.writeBufA // initl writeBuf is A
 	m.sendBuf = m.writeBufB

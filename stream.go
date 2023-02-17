@@ -13,13 +13,13 @@ import (
 // A Stream is a duplex connection multiplexed over a net.Conn. It implements
 // the net.Conn interface.
 type Stream struct {
-	m          *Mux
-	id         uint32
-	needAccept bool      // managed by Mux
-	cond       sync.Cond // guards + synchronizes subsequent fields
-	err        error
-	readBuf    []byte
-	rd, wd     time.Time // deadlines
+	m  *Mux
+	id uint32
+	//needAccept bool      // managed by Mux
+	cond    sync.Cond // guards + synchronizes subsequent fields
+	err     error
+	readBuf []byte
+	rd, wd  time.Time // deadlines
 }
 
 // LocalAddr returns the underlying connection's LocalAddr.
