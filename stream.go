@@ -13,9 +13,8 @@ import (
 // A Stream is a duplex connection multiplexed over a net.Conn. It implements
 // the net.Conn interface.
 type Stream struct {
-	m  *Mux
-	id uint32
-	//needAccept bool      // managed by Mux
+	m       *Mux
+	id      uint32
 	cond    sync.Cond // guards + synchronizes subsequent fields
 	err     error
 	readBuf []byte
@@ -66,7 +65,7 @@ func (s *Stream) SetWriteDeadline(t time.Time) error {
 // consumeFrame stores a frame in s.readBuf and waits for it to be consumed by
 // (*Stream).Read calls.
 func (s *Stream) consumeFrame(h frameHeader, payload []byte) {
-	if h.flags&flagLast != 0 {
+	if h.flags&flagLast == flagLast {
 		// stream is closing; set s.err
 		err := ErrPeerClosedStream
 		if h.flags&flagError != 0 {

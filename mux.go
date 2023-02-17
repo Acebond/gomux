@@ -100,15 +100,6 @@ func (m *Mux) bufferFrame(h frameHeader, payload []byte, deadline time.Time) err
 	m.writeBuf = appendFrame(m.writeBuf, h, payload)
 	m.cond.Broadcast()
 
-	//if covert {
-	// wake all other bufferFrame calls
-	//
-	// NOTE: this causes lots of spurious wakeups. Covert bandwidth is
-	// precious, though, so it's better to take a small performance hit to
-	// ensure that we're making use of whatever bandwidth is available.
-	// If it becomes a problem, we can easily add a separate sync.Cond.
-	//m.bufferCond.Broadcast()
-	//} else {
 	// wake at most one bufferFrame call
 	//
 	// NOTE: it's possible that we'll wake the "wrong" bufferFrame call, i.e.
@@ -119,7 +110,6 @@ func (m *Mux) bufferFrame(h frameHeader, payload []byte, deadline time.Time) err
 	// could probably get the best of both worlds with a more sophisticated
 	// buffering strategy, but the current implementation is fast enough.
 	m.bufferCond.Signal()
-	//}
 	return nil
 }
 
@@ -128,9 +118,7 @@ func (m *Mux) bufferFrame(h frameHeader, payload []byte, deadline time.Time) err
 // underlying connection. It also handles keepalives.
 func (m *Mux) writeLoop() {
 	// wake cond whenever a keepalive is due
-	// NOTE: we send a keepalive when 75% of the MaxTimeout has elapsed
-	maxTimeout := 20 * time.Minute
-	keepaliveInterval := maxTimeout - maxTimeout/4
+	keepaliveInterval := time.Minute * 10
 	nextKeepalive := time.Now().Add(keepaliveInterval)
 	timer := time.AfterFunc(keepaliveInterval, m.cond.Broadcast)
 	defer timer.Stop()
@@ -173,7 +161,6 @@ func (m *Mux) writeLoop() {
 
 		// clear sendBuf
 		m.sendBuf = m.sendBuf[:0]
-
 	}
 }
 
@@ -182,7 +169,7 @@ func (m *Mux) writeLoop() {
 // Stream if none exists. It then waits for the frame to be fully consumed by
 // the Stream before attempting to Read again.
 func (m *Mux) readLoop() {
-	var curStream *Stream // saves a lock acquisition + map lookup in the common case
+	var curStream *Stream
 
 	fr := &frameReader{
 		reader:  m.conn,
@@ -202,36 +189,34 @@ func (m *Mux) readLoop() {
 			continue // no action required
 		}
 
-		// look for matching Stream
-		if curStream == nil || h.id != curStream.id {
-			m.mu.Lock()
-			if s := m.streams[h.id]; s != nil {
-				curStream = s
-			} else {
-				if h.flags&flagFirst == 0 {
-					// we don't recognize the frame's ID, but it's not the
-					// first frame of a new stream either; we must have
-					// already closed the stream this frame belongs to, so
-					// ignore it
-					m.mu.Unlock()
-					continue
-				}
-				// create a new stream
-				curStream = &Stream{
-					m:  m,
-					id: h.id,
-					// needAccept: true,
-					cond: sync.Cond{L: new(sync.Mutex)},
-				}
-				m.streams[h.id] = curStream
-
-				// m.cond.Broadcast() // wake (*Mux).AcceptStream
-				m.acceptChan <- curStream
-
+		if h.flags&flagFirst == flagFirst {
+			// create a new stream
+			curStream = &Stream{
+				m:    m,
+				id:   h.id,
+				cond: sync.Cond{L: new(sync.Mutex)},
 			}
+			m.mu.Lock()
+			m.streams[h.id] = curStream
 			m.mu.Unlock()
+			m.acceptChan <- curStream
+			continue
 		}
-		curStream.consumeFrame(h, payload)
+
+		// try and save a lock acquisition + map lookup
+		if curStream != nil && h.id == curStream.id {
+			curStream.consumeFrame(h, payload)
+		} else {
+			m.mu.Lock()
+			curStream, found := m.streams[h.id]
+			m.mu.Unlock()
+			if found {
+				curStream.consumeFrame(h, payload)
+			}
+		}
+
+		// it's not the first frame of a new stream AND we don't recognize the frame's ID either;
+		// we must have already closed the stream this frame belongs to, so ignore it
 	}
 }
 
@@ -292,7 +277,7 @@ func newMux(conn net.Conn) *Mux {
 	m := &Mux{
 		conn:       conn,
 		streams:    make(map[uint32]*Stream),
-		acceptChan: make(chan *Stream, 128),
+		acceptChan: make(chan *Stream, 256),
 		writeBufA:  make([]byte, 0, maxFrameSize*10),
 		writeBufB:  make([]byte, 0, maxFrameSize*10),
 	}
@@ -335,6 +320,6 @@ func (m *Mux) OpenStreamContext(ctx context.Context) (*Stream, error) {
 // Accept reciprocates a mux protocol handshake on the provided conn.
 func Server(conn net.Conn) (*Mux, error) {
 	m := newMux(conn)
-	m.nextID++ // avoid collisions with Dialing peer
+	m.nextID++ // avoid collisions with client peer
 	return m, nil
 }
