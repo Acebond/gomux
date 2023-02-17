@@ -50,19 +50,25 @@ The ID specifies which *stream* a frame belongs to. Streams are numbered sequent
 
 The payload length specifies the length of the payload.
 
-The flags are defined as:
+The flags are in order of precedence and defined as:
 
 | Bit | Description           |
 |-----|-----------------------|
-|  0  | First frame in stream |
-|  1  | Last frame in stream  |
-|  2  | Error                 |
-|  3  | Keepalive frame       |
+|  0  | Keepalive             |
+|  1  | First                 |
+|  2  | CloseWrite            |
+|  3  | CloseRead             |
+|  4  | Last                  |
+|  5  | Error                 |
+
+The "Keepalive" flag indicates a keepalive frame. Keepalives contain no payload and merely serve to keep the underlying connection open.
 
 The "First" flag indicates to the accepting peer the creation of a new stream.
 
-The "Last" flag indicates that the stream is closed.
+The "CloseWrite" flag shuts down the writing side of the stream.
 
-The "Error" flag may only be set alongside the "Last frame" flag, and indicates that the payload contains a string describing why the stream was closed.
+The "CloseRead" flag shuts down the reading side of the stream.
 
-The "Keepalive" flag indicates a keepalive frame. Keepalives contain no payload and merely serve to keep the underlying connection open.
+The "Last" flag indicates that the stream has been closed by the peer.
+
+The "Error" flag may only be set alongside the "Last" flag, and indicates that the payload contains a string describing why the stream was closed.
