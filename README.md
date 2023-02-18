@@ -2,6 +2,46 @@
 
 Gomux is a high-performance stream multiplexer forked from [SiaMux](https://github.com/SiaFoundation/mux). It allows you to operate many distinct bidirectional streams on top of a single underlying connection. Gomux follows the Unix philosophy of "do one thing and do it well" and unlike SiaMux does not offer encryption, authentication or covert streams. Encryption and  authentication can if required be implemented on the underlying connection used by Gomux.
 
+## Specification
+
+A gomux session is an exchange of *frames* between two peers over a shared connection.
+
+### Frames
+
+All integers in this spec are little-endian.
+
+A frame consists of a *frame header* followed by a payload. A header is:
+
+| Length | Type   | Description    |
+|--------|--------|----------------|
+|   4    | uint32 | ID             |
+|   2    | uint16 | Payload length |
+|   2    | uint16 | Flags          |
+
+The ID specifies which *stream* a frame belongs to. Streams are numbered sequentially, starting at 0. To prevent collisions, streams initiated by the client peer use even IDs, while the server peer uses odd IDs.
+
+The payload length specifies the length of the payload.
+
+The flags are mutually exclusive and defined as:
+
+| Bit | Description           |
+|-----|-----------------------|
+|  0  | Keepalive             |
+|  1  | OpenStream            |
+|  2  | CloseRead             |
+|  3  | CloseWrite            |
+|  4  | CloseStream           |
+
+The "Keepalive" flag indicates a keepalive frame. Keepalives contain no payload and merely serve to keep the underlying connection open.
+
+The "OpenStream" flag indicates to the accepting peer the creation of a new stream.
+
+The "CloseRead" flag shuts down the reading side of the stream.
+
+The "CloseWrite" flag shuts down the writing side of the stream.
+
+The "CloseStream" flag indicates that the stream has been closed by the peer.
+
 ## Benchmark
 Gomux on an i5-13600K can transfer approximately 4500 MB/s. The number of streams does not impact performance. 
 
@@ -28,47 +68,3 @@ BenchmarkMux/1000-20                  85          14059162 ns/op        4661.37 
 PASS
 ok      github.com/Acebond/gomux        10.553s
 ```
-
-
-## Specification
-
-A gomux session is an exchange of *frames* between two peers over a shared connection.
-
-### Frames
-
-All integers in this spec are little-endian.
-
-A frame consists of a *frame header* followed by a payload. A header is:
-
-| Length | Type   | Description    |
-|--------|--------|----------------|
-|   4    | uint32 | ID             |
-|   2    | uint16 | Payload length |
-|   2    | uint16 | Flags          |
-
-The ID specifies which *stream* a frame belongs to. Streams are numbered sequentially, starting at 0. To prevent collisions, streams initiated by the client peer use even IDs, while the server peer uses odd IDs.
-
-The payload length specifies the length of the payload.
-
-The flags are in order of precedence and defined as:
-
-| Bit | Description           |
-|-----|-----------------------|
-|  0  | Keepalive             |
-|  1  | First                 |
-|  2  | CloseWrite            |
-|  3  | CloseRead             |
-|  4  | Last                  |
-|  5  | Error                 |
-
-The "Keepalive" flag indicates a keepalive frame. Keepalives contain no payload and merely serve to keep the underlying connection open.
-
-The "First" flag indicates to the accepting peer the creation of a new stream.
-
-The "CloseWrite" flag shuts down the writing side of the stream.
-
-The "CloseRead" flag shuts down the reading side of the stream.
-
-The "Last" flag indicates that the stream has been closed by the peer.
-
-The "Error" flag may only be set alongside the "Last" flag, and indicates that the payload contains a string describing why the stream was closed.

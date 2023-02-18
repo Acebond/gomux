@@ -23,6 +23,7 @@ var (
 	ErrClosedStream     = errors.New("stream was gracefully closed")
 	ErrPeerClosedStream = errors.New("peer closed stream gracefully")
 	ErrPeerClosedConn   = errors.New("peer closed underlying connection")
+	ErrWriteClosed      = errors.New("write end of stream closed")
 )
 
 // A Mux multiplexes multiple duplex Streams onto a single net.Conn.
@@ -185,11 +186,11 @@ func (m *Mux) readLoop() {
 			return
 		}
 
-		if h.flags&flagKeepalive == flagKeepalive {
+		if h.flags == flagKeepalive {
 			continue // no action required
 		}
 
-		if h.flags&flagFirst == flagFirst {
+		if h.flags == flagOpenStream {
 			// create a new stream
 			curStream = &Stream{
 				m:    m,
@@ -250,9 +251,8 @@ func (m *Mux) OpenStream() (*Stream, error) {
 	m.mu.Lock()
 
 	s := &Stream{
-		m:  m,
-		id: m.nextID,
-		//needAccept: false,
+		m:    m,
+		id:   m.nextID,
 		cond: sync.Cond{L: new(sync.Mutex)},
 		err:  m.err, // stream is unusable if m.err is set
 	}
@@ -264,9 +264,8 @@ func (m *Mux) OpenStream() (*Stream, error) {
 
 	// send First frame to tell peer the stream exists
 	h := frameHeader{
-		id:     s.id,
-		length: 0,
-		flags:  flagFirst,
+		id:    s.id,
+		flags: flagOpenStream,
 	}
 
 	return s, s.m.bufferFrame(h, nil, s.wd)

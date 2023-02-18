@@ -20,10 +20,11 @@ const (
 )
 
 const (
-	flagFirst     = 1 << iota // first frame in stream
-	flagLast                  // stream is being closed gracefully
-	flagError                 // stream is being closed due to an error
-	flagKeepalive             // empty frame to keep connection open
+	flagKeepalive   = 1 << iota // empty frame to keep connection open
+	flagOpenStream              // first frame in stream
+	flagCloseRead               // shuts down the reading side of the stream
+	flagCloseWrite              // shuts down the writing side of the stream
+	flagCloseStream             // stream is being closed gracefully
 )
 
 func encodeFrameHeader(buf []byte, h frameHeader) {
