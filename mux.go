@@ -241,8 +241,6 @@ func (m *Mux) AcceptStream() (*Stream, error) {
 	if s, ok := <-m.acceptChan; ok {
 		return s, nil
 	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
 	return nil, m.err
 }
 
