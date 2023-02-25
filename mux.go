@@ -65,9 +65,9 @@ func (m *Mux) setErr(err error) error {
 		s.cond.L.Unlock()
 	}
 	m.conn.Close()
-	close(m.acceptChan)
 	m.cond.Broadcast()
 	m.bufferCond.Broadcast()
+	close(m.acceptChan)
 	return err
 }
 
@@ -167,10 +167,8 @@ func (m *Mux) writeLoop() {
 
 // readLoop handles the actual Reads from the Mux's net.Conn. It waits for a
 // frame to arrive, then routes it to the appropriate Stream, creating a new
-// Stream if none exists. It then waits for the frame to be fully consumed by
-// the Stream before attempting to Read again.
+// Stream if none exists.
 func (m *Mux) readLoop() {
-	var curStream *Stream
 
 	fr := &frameReader{
 		reader:  m.conn,
@@ -191,25 +189,19 @@ func (m *Mux) readLoop() {
 		}
 
 		if h.flags == flagOpenStream {
-			// create a new stream
-			curStream = newStream(h.id, m)
+			s := newStream(h.id, m)
 			m.mu.Lock()
-			m.streams[h.id] = curStream
+			m.streams[h.id] = s
 			m.mu.Unlock()
-			m.acceptChan <- curStream
+			m.acceptChan <- s
 			continue
 		}
 
-		// try and save a lock acquisition + map lookup
-		if curStream != nil && h.id == curStream.id {
+		m.mu.Lock()
+		curStream, found := m.streams[h.id]
+		m.mu.Unlock()
+		if found {
 			curStream.consumeFrame(h, payload)
-		} else {
-			m.mu.Lock()
-			curStream, found := m.streams[h.id]
-			m.mu.Unlock()
-			if found {
-				curStream.consumeFrame(h, payload)
-			}
 		}
 
 		// it's not the first frame of a new stream AND we don't recognize the frame's ID either;
@@ -281,9 +273,9 @@ func Client(conn net.Conn) (*Mux, error) {
 	return newMux(conn), nil
 }
 
-// DialStreamContext creates a new Stream with the provided context. When the
+// OpenStreamContext creates a new Stream with the provided context. When the
 // context expires, the Stream will be closed and any pending calls will return
-// ctx.Err(). DialStreamContext spawns a goroutine whose lifetime matches that
+// ctx.Err(). OpenStreamContext spawns a goroutine whose lifetime matches that
 // of the context.
 func (m *Mux) OpenStreamContext(ctx context.Context) (*Stream, error) {
 	s, err := m.OpenStream()

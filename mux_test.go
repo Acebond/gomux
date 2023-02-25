@@ -7,7 +7,7 @@ import (
 	"math"
 	"net"
 	"os"
-	"runtime/pprof"
+	"runtime/debug"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -15,36 +15,49 @@ import (
 )
 
 func newTestingPair(tb testing.TB) (dialed, accepted *Mux) {
-	l, err := net.Listen("tcp", ":0")
-	if err != nil {
-		tb.Fatal(err)
-	}
-	errChan := make(chan error, 1)
+	errChanServer := make(chan error, 1)
+	errChanClient := make(chan error, 1)
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+
 	go func() {
-		conn, err := l.Accept()
-		if err == nil {
-			accepted, err = Server(conn)
+		l, err := net.Listen("tcp", "127.0.0.1:60000")
+		if err != nil {
+			errChanServer <- err
 		}
-		errChan <- err
+		conn, err := l.Accept()
+		if err != nil {
+			errChanServer <- err
+		}
+		accepted, err = Server(conn)
+		if err != nil {
+			errChanServer <- err
+		}
+		close(errChanServer)
+		wg.Done()
 	}()
 
-	conn, err := net.Dial("tcp", l.Addr().String())
-	if err != nil {
-		tb.Fatal(err)
-	}
-	dialed, err = Client(conn)
-	if err != nil {
-		tb.Fatal(err)
-	}
-	if err := <-errChan; err != nil {
-		tb.Fatal(err)
-	}
+	go func() {
+		conn, err := net.Dial("tcp", "127.0.0.1:60000")
+		if err != nil {
+			errChanClient <- err
+		}
+		dialed, err = Client(conn)
+		if err != nil {
+			errChanClient <- err
+		}
+		close(errChanClient)
+		wg.Done()
+	}()
 
-	tb.Cleanup(func() {
-		dialed.Close()
-		accepted.Close()
-	})
-
+	if err := <-errChanServer; err != nil {
+		tb.Fatal(err)
+	}
+	if err := <-errChanClient; err != nil {
+		tb.Fatal(err)
+	}
+	wg.Wait()
 	return
 }
 
@@ -369,7 +382,7 @@ func TestDeadline(t *testing.T) {
 		}
 		for i, test := range tests {
 			err := func() error {
-				s := m1.DialStreamContext(test.context())
+				s := m1.OpenStreamContext(test.context())
 				defer s.Close()
 
 				msg := make([]byte, m1.settings.PacketSize*10+8)
@@ -416,198 +429,53 @@ func (c *statsConn) Write(b []byte) (int, error) {
 	return n, err
 }
 
-/*
-	func TestCovertStream(t *testing.T) {
-		l, err := net.Listen("tcp", ":0")
-		if err != nil {
-			t.Fatal(err)
-		}
-		serverCh := make(chan error, 1)
-		go func() {
-			serverCh <- func() error {
-				conn, err := l.Accept()
-				if err != nil {
-					return err
-				}
-				m, err := AcceptAnonymous(conn)
-				if err != nil {
-					return err
-				}
-				defer m.Close()
-				// accept covert stream
-				cs, err := m.AcceptStream()
-				if err != nil {
-					return err
-				}
-				covertCh := make(chan error)
-				go func() {
-					defer cs.Close()
-					buf := make([]byte, 100)
-					if n, err := cs.Read(buf); err != nil {
-						covertCh <- err
-					} else if _, err := fmt.Fprintf(cs, "hello, %s!", buf[:n]); err != nil {
-						covertCh <- err
-					} else {
-						covertCh <- cs.Close()
-					}
-				}()
-				// accept regular stream
-				s, err := m.AcceptStream()
-				if err != nil {
-					return err
-				}
-				defer s.Close()
-				buf := make([]byte, 100)
-				n, err := s.Read(buf)
-				if err != nil {
-					return err
-				}
-				// wait for covert stream to buffer before writing
-				if err := <-covertCh; err != nil {
-					return err
-				}
-				if _, err := fmt.Fprintf(s, "hello, %s!", buf[:n]); err != nil {
-					return err
-				} else if err := s.Close(); err != nil {
-					return err
-				}
-				return m.Close()
-			}()
-		}()
-
-		conn, err := net.Dial("tcp", l.Addr().String())
-		if err != nil {
-			t.Fatal(err)
-		}
-		conn = &statsConn{Conn: conn} // track raw number of bytes on wire
-
-		m, err := DialAnonymous(conn)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer m.Close()
-
-		covertCh := make(chan error, 1)
-		bufChan := make(chan struct{})
-		go func() {
-			s := m.DialCovertStream()
-			defer s.Close()
-			buf := make([]byte, 100)
-			if _, err := s.Write([]byte("covert")); err != nil {
-				covertCh <- err
-				return
-			}
-			bufChan <- struct{}{}
-			if n, err := io.ReadFull(s, buf[:14]); err != nil {
-				covertCh <- err
-			} else if string(buf[:n]) != "hello, covert!" {
-				covertCh <- fmt.Errorf("bad hello: %s %x", buf[:n], buf[:n])
-			} else {
-				covertCh <- s.Close()
-			}
-		}()
-
-		// to generate padding for covert stream, send a regular packet
-		s := m.DialStream()
-		<-bufChan // wait for covert stream to buffer
-		buf := make([]byte, 100)
-		if _, err := s.Write([]byte("world")); err != nil {
-			t.Log(<-serverCh)
-			t.Fatal(err)
-		} else if n, err := io.ReadFull(s, buf[:13]); err != nil {
-			t.Log(<-serverCh)
-			t.Fatal(err)
-		} else if string(buf[:n]) != "hello, world!" {
-			t.Fatalf("bad hello: %s", buf[:n])
-		}
-
-		if err := <-covertCh; err != nil && err != ErrPeerClosedConn {
-			t.Fatal(err)
-		} else if err := m.Close(); err != nil {
-			t.Fatal(err)
-		} else if err := <-serverCh; err != nil && err != ErrPeerClosedStream {
-			t.Fatal(err)
-		}
-		// wait for read/write goroutines to exit
-		time.Sleep(time.Second)
-
-		// amount of data transferred should be the same as without covert stream
-		expWritten := 32 + // key exchange
-			connSettingsSize + chachaOverhead + // settings
-			m.settings.PacketSize // "world"
-
-		expRead := 32 + 64 + // key exchange
-			connSettingsSize + chachaOverhead + // settings
-			m.settings.PacketSize // "hello, world!"
-
-		w := int(atomic.LoadInt32(&conn.(*statsConn).w))
-		r := int(atomic.LoadInt32(&conn.(*statsConn).r))
-
-		// NOTE: either peer may have sent the Close packet, or both; we don't care
-		// either way
-		if w > expWritten {
-			expWritten += m.settings.PacketSize
-		}
-		if r > expRead {
-			expRead += m.settings.PacketSize
-		}
-		if w != expWritten {
-			t.Errorf("wrote %v bytes, expected %v", w, expWritten)
-		}
-		if r != expRead {
-			t.Errorf("read %v bytes, expected %v", r, expRead)
-		}
-	}
-*/
 func BenchmarkMux(b *testing.B) {
-	for _, numStreams := range []int{1, 2, 10, 100, 500, 1000} {
-		b.Run(fmt.Sprint(numStreams), func(b *testing.B) {
-			m1, m2 := newTestingPair(b)
+	debug.SetGCPercent(-1)
+	numStreams := 500
 
-			_ = handleStreams(m2, func(s *Stream) error {
-				io.Copy(io.Discard, s)
-				return nil
-			})
-			defer m1.Close() // ensure handleStreams exits
+	m1, m2 := newTestingPair(b)
+	defer m2.Close()
+	defer m1.Close()
 
-			// open each stream in a separate goroutine
-			bufSize := math.MaxUint16
-			buf := make([]byte, bufSize)
-			b.ResetTimer()
-			b.SetBytes(int64(bufSize * numStreams))
-			b.ReportAllocs()
-			start := time.Now()
-			var wg sync.WaitGroup
-			wg.Add(numStreams)
-			for j := 0; j < numStreams; j++ {
-				go func() {
-					defer wg.Done()
-					s, err := m1.OpenStream()
-					if err != nil {
-						panic(err)
-					}
-					defer s.Close()
-					for i := 0; i < b.N; i++ {
-						if _, err := s.Write(buf); err != nil {
-							panic(err)
-						}
-					}
-				}()
+	_ = handleStreams(m2, func(s *Stream) error {
+		io.Copy(io.Discard, s)
+		return nil
+	})
+
+	// open each stream in a separate goroutine
+	bufSize := math.MaxUint16
+	buf := make([]byte, bufSize)
+	b.ResetTimer()
+	b.SetBytes(int64(bufSize * numStreams))
+	b.ReportAllocs()
+	start := time.Now()
+	var wg sync.WaitGroup
+	wg.Add(numStreams)
+	for j := 0; j < numStreams; j++ {
+		go func() {
+			defer wg.Done()
+			s, err := m1.OpenStream()
+			if err != nil {
+				panic(err)
 			}
-			wg.Wait()
-			b.ReportMetric(float64(b.N*numStreams)/time.Since(start).Seconds(), "frames/sec")
-		})
-
+			defer s.Close()
+			for i := 0; i < b.N; i++ {
+				if _, err := s.Write(buf); err != nil {
+					panic(err)
+				}
+			}
+		}()
 	}
-	f, _ := os.Create("heap.out")
-	pprof.WriteHeapProfile(f)
-	f.Close()
+	wg.Wait()
+	b.ReportMetric(float64(b.N*numStreams)/time.Since(start).Seconds(), "frames/sec")
+
+	//f, _ := os.Create("heap.out")
+	//pprof.WriteHeapProfile(f)
+	//f.Close()
 }
 
-/*
+// benchmark throughput of raw TCP conn
 func BenchmarkConn(b *testing.B) {
-	// benchmark throughput of raw TCP conn (plus encryption overhead to make it fair)
-	encryptionKey := make([]byte, 32)
 	l, err := net.Listen("tcp", ":0")
 	if err != nil {
 		b.Fatal(err)
@@ -620,14 +488,11 @@ func BenchmarkConn(b *testing.B) {
 				return err
 			}
 			defer conn.Close()
-			aead, _ := chacha20poly1305.New(encryptionKey)
-			buf := make([]byte, defaultConnSettings.PacketSize)
+
+			buf := make([]byte, math.MaxUint16)
 			for {
 				_, err := io.ReadFull(conn, buf)
 				if err != nil {
-					return err
-				}
-				if _, err := decryptInPlace(buf, aead); err != nil {
 					return err
 				}
 			}
@@ -645,47 +510,13 @@ func BenchmarkConn(b *testing.B) {
 	}
 	defer conn.Close()
 
-	aead, _ := chacha20poly1305.New(encryptionKey)
-	buf := make([]byte, defaultConnSettings.PacketSize*10)
+	buf := make([]byte, math.MaxUint16)
 	b.ResetTimer()
-	b.SetBytes(int64(defaultConnSettings.maxPayloadSize()))
+	b.SetBytes(math.MaxUint16)
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		encryptInPlace(buf, aead)
 		if _, err := conn.Write(buf); err != nil {
 			b.Fatal(err)
 		}
 	}
 }
-*/
-
-/*
-func BenchmarkPackets(b *testing.B) {
-	for _, packetSize := range []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 20} {
-		b.Run(fmt.Sprintf("%dx%d", ipv6MTU, packetSize), func(b *testing.B) {
-			defaultConnSettings.PacketSize = ipv6MTU * packetSize
-
-			m1, m2 := newTestingPair(b)
-
-			_ = handleStreams(m2, func(s *Stream) error {
-				io.Copy(io.Discard, s)
-				return nil
-			})
-
-			// open each stream in a separate goroutine
-			bufSize := defaultConnSettings.maxPayloadSize()
-			buf := make([]byte, bufSize)
-			b.ResetTimer()
-			b.SetBytes(int64(bufSize))
-			b.ReportAllocs()
-			s := m1.DialStream()
-			defer s.Close()
-			for i := 0; i < b.N; i++ {
-				if _, err := s.Write(buf); err != nil {
-					b.Fatal(err)
-				}
-			}
-		})
-	}
-}
-*/

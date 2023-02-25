@@ -75,6 +75,16 @@ func (s *Stream) SetWriteDeadline(t time.Time) error {
 	return nil
 }
 
+func (s *Stream) delayedClose() {
+	s.cond.L.Lock()
+	for s.readBuf.Len() > 0 {
+		s.cond.Wait()
+	}
+	s.err = ErrPeerClosedStream
+	s.cond.Broadcast() // wake Read/Write
+	s.cond.L.Unlock()
+}
+
 // consumeFrame processes a frame based on h.flags.
 func (s *Stream) consumeFrame(h frameHeader, payload []byte) {
 	s.cond.L.Lock()
@@ -91,6 +101,7 @@ func (s *Stream) consumeFrame(h frameHeader, payload []byte) {
 	case flagCloseStream:
 		s.err = ErrPeerClosedStream
 		s.cond.Broadcast() // wake Read/Write
+		//go s.delayedClose()
 		s.m.mu.Lock()
 		delete(s.m.streams, s.id) // delete stream from Mux
 		s.m.mu.Unlock()
@@ -132,6 +143,8 @@ func (s *Stream) Read(p []byte) (int, error) {
 	}
 
 	n, _ := s.readBuf.Read(p)
+
+	s.cond.Broadcast() // wake delayedClose()
 
 	// tell sender bytes have been consumed
 	h := frameHeader{
