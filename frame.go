@@ -4,7 +4,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
-	"log"
 	"math"
 )
 
@@ -21,7 +20,6 @@ const (
 )
 
 const (
-	//flagData          // data frame
 	flagKeepalive    = 1 << iota // empty frame to keep connection open
 	flagOpenStream               // first frame in stream
 	flagCloseRead                // shuts down the reading side of the stream
@@ -63,8 +61,6 @@ func (fr *frameReader) nextFrame() (frameHeader, []byte, error) {
 		return frameHeader{}, nil, fmt.Errorf("could not read frame header: %w", err)
 	}
 	h := decodeFrameHeader(fr.header)
-
-	log.Printf("Get frame ID (%v) (length=%v, flags=%v)", h.id, h.length, h.flags)
 
 	if h.flags == 0 {
 		if _, err := io.ReadFull(fr.reader, fr.payload[:h.length]); err != nil {

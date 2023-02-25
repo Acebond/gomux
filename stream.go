@@ -3,13 +3,12 @@ package gomux
 import (
 	"bytes"
 	"io"
-	"log"
 	"net"
 	"os"
 	"sync"
 	"time"
 
-	circular "github.com/Acebond/gomux/ring"
+	"github.com/Acebond/gomux/ringbuffer"
 )
 
 // A Stream is a duplex connection multiplexed over a net.Conn. It implements the net.Conn interface.
@@ -20,7 +19,7 @@ type Stream struct {
 	rc, wc     bool      // read closed, write closed
 	err        error
 	windowSize uint16
-	readBuf    *circular.Buffer
+	readBuf    *ringbuffer.Buffer
 	rd, wd     time.Time // deadlines
 }
 
@@ -31,7 +30,7 @@ func newStream(id uint32, m *Mux) *Stream {
 		cond:       sync.Cond{L: new(sync.Mutex)},
 		err:        m.err, // stream is unusable if m.err is set
 		windowSize: maxPayloadSize,
-		readBuf:    circular.NewBuffer(maxPayloadSize), // must be same as windowSize
+		readBuf:    ringbuffer.NewBuffer(maxPayloadSize), // must be same as windowSize
 	}
 }
 
@@ -76,65 +75,33 @@ func (s *Stream) SetWriteDeadline(t time.Time) error {
 	return nil
 }
 
-func (s *Stream) closeStream() {
-
+// consumeFrame processes a frame based on h.flags.
+func (s *Stream) consumeFrame(h frameHeader, payload []byte) {
 	s.cond.L.Lock()
 	defer s.cond.L.Unlock()
 
-	for s.readBuf.Len() > 0 {
-		s.cond.Wait()
-	}
-
-	s.err = ErrPeerClosedStream
-
-	s.cond.Broadcast() // wake??
-
-	// delete stream from Mux
-	s.m.mu.Lock()
-	delete(s.m.streams, s.id)
-	s.m.mu.Unlock()
-}
-
-// consumeFrame stores a frame in s.readBuf and waits for it to be consumed by (*Stream).Read calls.
-func (s *Stream) consumeFrame(h frameHeader, payload []byte) {
 	switch h.flags {
 	case flagCloseWrite:
-		s.cond.L.Lock()
 		s.wc = true
-		s.cond.L.Unlock()
 
 	case flagCloseRead:
-		s.cond.L.Lock()
 		s.rc = true
-		s.cond.L.Unlock()
 		s.cond.Broadcast() // wake Read
 
 	case flagCloseStream:
-		s.cond.L.Lock()
 		s.err = ErrPeerClosedStream
-		s.cond.L.Unlock()
-		s.cond.Broadcast() // wake Read
-		// delete stream from Mux
+		s.cond.Broadcast() // wake Read/Write
 		s.m.mu.Lock()
-		delete(s.m.streams, s.id)
+		delete(s.m.streams, s.id) // delete stream from Mux
 		s.m.mu.Unlock()
 
 	case flagWindowUpdate:
-		s.cond.L.Lock()
 		s.windowSize += h.length
 		s.cond.Broadcast() // wake Write
-		s.cond.L.Unlock()
 
 	case 0:
-		s.cond.L.Lock()
 		s.readBuf.Write(payload)
 		s.cond.Broadcast() // wake Read
-		s.cond.L.Unlock()
-
-	default:
-		// The flags are mutually exclusive, we should never be here
-		// ignore as the peer sent a bad frame
-		log.Printf("peer sent invalid frame ID (%v) (length=%v, flags=%v)", h.id, h.length, h.flags)
 	}
 }
 
@@ -163,7 +130,7 @@ func (s *Stream) Read(p []byte) (int, error) {
 	} else if !s.rd.IsZero() && !time.Now().Before(s.rd) {
 		return 0, os.ErrDeadlineExceeded
 	}
-	//n := copy(p, s.readBuf)
+
 	n, _ := s.readBuf.Read(p)
 
 	// tell sender bytes have been consumed
@@ -173,13 +140,14 @@ func (s *Stream) Read(p []byte) (int, error) {
 		flags:  flagWindowUpdate,
 	}
 	err := s.m.bufferFrame(h, nil, s.rd)
-	// s.readBuf = s.readBuf[n:]
-	// s.cond.Broadcast() // wake close
 	return n, err
 }
 
 // Write writes data to the Stream.
 func (s *Stream) Write(p []byte) (int, error) {
+	s.cond.L.Lock()
+	defer s.cond.L.Unlock()
+
 	buf := bytes.NewBuffer(p)
 	for buf.Len() > 0 {
 
@@ -189,25 +157,21 @@ func (s *Stream) Write(p []byte) (int, error) {
 			length: uint16(len(payload)),
 		}
 
-		s.cond.L.Lock()
 		for h.length > s.windowSize && s.err == nil && !s.wc && (s.wd.IsZero() || time.Now().Before(s.wd)) {
 			s.cond.Wait()
 		}
-		s.cond.L.Unlock()
 
-		// check for error
-		// TODO fix sizes
 		if s.err != nil {
-			return len(p) - buf.Len(), s.err
+			return len(p) - buf.Len() - len(payload), s.err
 		} else if s.wc {
-			return len(p) - buf.Len(), ErrWriteClosed
+			return len(p) - buf.Len() - len(payload), ErrWriteClosed
 		}
 
 		// write next frame's worth of data
 		s.windowSize -= h.length
 		err := s.m.bufferFrame(h, payload, s.wd)
 		if err != nil {
-			return len(p) - buf.Len(), err
+			return len(p) - buf.Len() - len(payload), err
 		}
 	}
 	return len(p), nil

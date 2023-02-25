@@ -1,4 +1,4 @@
-package circular
+package ringbuffer
 
 import (
 	"fmt"
