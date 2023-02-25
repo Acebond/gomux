@@ -1,7 +1,6 @@
 package gomux
 
 import (
-	"context"
 	"errors"
 	"net"
 	"os"
@@ -22,7 +21,7 @@ var (
 	ErrClosedConn       = errors.New("underlying connection was closed")
 	ErrClosedStream     = errors.New("stream was gracefully closed")
 	ErrPeerClosedStream = errors.New("peer closed stream gracefully")
-	ErrPeerClosedConn   = errors.New("peer closed underlying connection")
+	ErrPeerClosedConn   = errors.New("peer closed mux gracefully")
 	ErrWriteClosed      = errors.New("write end of stream closed")
 )
 
@@ -51,11 +50,6 @@ func (m *Mux) setErr(err error) error {
 		return m.err
 	}
 
-	// try to detect when the peer closed the connection
-	if isConnCloseError(err) {
-		err = ErrPeerClosedConn
-	}
-
 	// set sticky error, close conn, and wake everyone up
 	m.err = err
 	for _, s := range m.streams {
@@ -71,8 +65,8 @@ func (m *Mux) setErr(err error) error {
 	return err
 }
 
-// bufferFrame blocks until it can store its frame in m.writeBuf.
-// It returns early with an error if m.err is set or if the deadline expires.
+// bufferFrame blocks until it can store its frame in m.writeBuf. It returns
+// early with an error if m.err is set or if the deadline expires.
 func (m *Mux) bufferFrame(h frameHeader, payload []byte, deadline time.Time) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -184,41 +178,48 @@ func (m *Mux) readLoop() {
 			return
 		}
 
-		if h.flags == flagKeepalive {
-			continue // no action required
-		}
+		switch h.flags {
+		case flagKeepalive:
+			// no action required
 
-		if h.flags == flagOpenStream {
+		case flagOpenStream:
 			s := newStream(h.id, m)
 			m.mu.Lock()
 			m.streams[h.id] = s
 			m.mu.Unlock()
 			m.acceptChan <- s
-			continue
-		}
 
-		m.mu.Lock()
-		curStream, found := m.streams[h.id]
-		m.mu.Unlock()
-		if found {
-			curStream.consumeFrame(h, payload)
-		}
+		case flagCloseMux:
+			m.setErr(ErrPeerClosedConn)
+			return
 
-		// it's not the first frame of a new stream AND we don't recognize the frame's ID either;
-		// we must have already closed the stream this frame belongs to, so ignore it
+		default:
+			m.mu.Lock()
+			curStream, found := m.streams[h.id]
+			m.mu.Unlock()
+			if found {
+				curStream.consumeFrame(h, payload)
+			} else {
+				// log.Printf("Received frame for assumed to be closed stream. (id=%v, length=%v, flags=%v)", h.id, h.length, h.flags)
+			}
+		}
 	}
 }
 
 // Close closes the underlying net.Conn.
 func (m *Mux) Close() error {
+	// tell perr we are shutting down
+	h := frameHeader{flags: flagCloseMux}
+	m.bufferFrame(h, nil, time.Time{})
+
 	// if there's a buffered Write, wait for it to be sent
 	m.mu.Lock()
-	for len(m.writeBuf) != 0 && m.err == nil {
+	for len(m.writeBuf) > 0 && m.err == nil {
 		m.bufferCond.Wait()
 	}
 	m.mu.Unlock()
 	err := m.setErr(ErrClosedConn)
-	if err == ErrClosedConn || err == ErrPeerClosedConn {
+	if err == ErrClosedConn {
 		err = nil
 	}
 	return err
@@ -245,7 +246,6 @@ func (m *Mux) OpenStream() (*Stream, error) {
 		id:    s.id,
 		flags: flagOpenStream,
 	}
-
 	return s, m.bufferFrame(h, nil, s.wd)
 }
 
@@ -258,8 +258,8 @@ func newMux(conn net.Conn) *Mux {
 		writeBufA:  make([]byte, 0, maxFrameSize*10),
 		writeBufB:  make([]byte, 0, maxFrameSize*10),
 	}
-	m.writeBuf = m.writeBufA // initial writeBuf is A
-	m.sendBuf = m.writeBufB  // initial sendBuf is B
+	m.writeBuf = m.writeBufA // initial writeBuf is writeBufA
+	m.sendBuf = m.writeBufB  // initial sendBuf is writeBufB
 	// both conds use the same mutex
 	m.cond.L = &m.mu
 	m.bufferCond.L = &m.mu
@@ -268,30 +268,14 @@ func newMux(conn net.Conn) *Mux {
 	return m
 }
 
-// Dial initiates a mux protocol handshake on the provided conn.
+// Client creates and initializes a new client-side Mux on the provided conn.
+// Client takes overship of the conn.
 func Client(conn net.Conn) (*Mux, error) {
 	return newMux(conn), nil
 }
 
-// OpenStreamContext creates a new Stream with the provided context. When the
-// context expires, the Stream will be closed and any pending calls will return
-// ctx.Err(). OpenStreamContext spawns a goroutine whose lifetime matches that
-// of the context.
-func (m *Mux) OpenStreamContext(ctx context.Context) (*Stream, error) {
-	s, err := m.OpenStream()
-	go func() {
-		<-ctx.Done()
-		s.cond.L.Lock()
-		defer s.cond.L.Unlock()
-		if ctx.Err() != nil && s.err == nil {
-			s.err = ctx.Err()
-			s.cond.Broadcast()
-		}
-	}()
-	return s, err
-}
-
-// Accept reciprocates a mux protocol handshake on the provided conn.
+// Server creates and initializes a new server-side Mux on the provided conn.
+// Server takes overship of the conn.
 func Server(conn net.Conn) (*Mux, error) {
 	m := newMux(conn)
 	m.nextID++ // avoid collisions with client peer

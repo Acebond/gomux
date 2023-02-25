@@ -25,7 +25,8 @@ const (
 	flagCloseRead                // shuts down the reading side of the stream
 	flagCloseWrite               // shuts down the writing side of the stream
 	flagCloseStream              // stream is being closed gracefully
-	flagWindowUpdate             // Used to updated the senders receive window size
+	flagWindowUpdate             // used to updated the read window size
+	flagCloseMux                 // mux is being closed gracefully
 )
 
 func encodeFrameHeader(buf []byte, h frameHeader) {

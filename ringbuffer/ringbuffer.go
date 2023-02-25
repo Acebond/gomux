@@ -90,6 +90,7 @@ func (b *Buffer) copyToBuffer(p []byte, start int) {
 		copy(p[N-start:], b.buf[:P-(N-start)])
 	}
 }
+
 func (b *Buffer) copyFromBuffer(p []byte, start int) {
 	N := len(b.buf)
 	P := len(p)
@@ -105,6 +106,7 @@ func (b *Buffer) copyFromBuffer(p []byte, start int) {
 		copy(b.buf[:P-(N-start)], p[N-start:])
 	}
 }
+
 func min(n, m int) int {
 	if n <= m {
 		return n

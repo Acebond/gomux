@@ -11,7 +11,8 @@ import (
 	"github.com/Acebond/gomux/ringbuffer"
 )
 
-// A Stream is a duplex connection multiplexed over a net.Conn. It implements the net.Conn interface.
+// A Stream is a duplex connection multiplexed over a net.Conn. It implements
+// the net.Conn interface.
 type Stream struct {
 	m          *Mux
 	id         uint32
@@ -73,16 +74,6 @@ func (s *Stream) SetWriteDeadline(t time.Time) error {
 	defer s.cond.L.Unlock()
 	s.wd = t
 	return nil
-}
-
-func (s *Stream) delayedClose() {
-	s.cond.L.Lock()
-	for s.readBuf.Len() > 0 {
-		s.cond.Wait()
-	}
-	s.err = ErrPeerClosedStream
-	s.cond.Broadcast() // wake Read/Write
-	s.cond.L.Unlock()
 }
 
 // consumeFrame processes a frame based on h.flags.
