@@ -14,7 +14,7 @@ type frameHeader struct {
 }
 
 const (
-	frameHeaderSize = 4 + 2 + 2
+	frameHeaderSize = 4 + 2 + 2 // sizeof(uint32) + sizeof(uint16) + sizeof(uint16)
 	maxPayloadSize  = math.MaxUint16
 	maxFrameSize    = frameHeaderSize + maxPayloadSize
 	writeBufferSize = maxFrameSize * 10
