@@ -70,11 +70,12 @@ func handleStreams(m *Mux, fn func(*Stream) error) chan error {
 }
 
 func TestMux(t *testing.T) {
-	//serverKey := ed25519.NewKeyFromSeed(frand.Bytes(ed25519.SeedSize))
 	l, err := net.Listen("tcp", ":0")
 	if err != nil {
 		t.Fatal(err)
 	}
+	var wg sync.WaitGroup
+	wg.Add(2)
 	serverCh := make(chan error, 1)
 	go func() {
 		serverCh <- func() error {
@@ -98,7 +99,9 @@ func TestMux(t *testing.T) {
 			} else if _, err := fmt.Fprintf(s, "hello, %s!", buf[:n]); err != nil {
 				return err
 			}
-			return s.Close()
+			wg.Done()
+			wg.Wait()
+			return nil
 		}()
 	}()
 
@@ -128,10 +131,11 @@ func TestMux(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	wg.Done()
+
 	if err := <-serverCh; err != nil && err != ErrPeerClosedStream {
 		t.Fatal(err)
 	}
-
 	// all streams should have been deleted
 	time.Sleep(time.Millisecond * 100)
 	m.mu.Lock()

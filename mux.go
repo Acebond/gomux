@@ -192,11 +192,7 @@ func (m *Mux) readLoop() {
 
 		if h.flags == flagOpenStream {
 			// create a new stream
-			curStream = &Stream{
-				m:    m,
-				id:   h.id,
-				cond: sync.Cond{L: new(sync.Mutex)},
-			}
+			curStream = newStream(h.id, m)
 			m.mu.Lock()
 			m.streams[h.id] = curStream
 			m.mu.Unlock()
@@ -247,26 +243,18 @@ func (m *Mux) AcceptStream() (*Stream, error) {
 // OpenStream creates a new Stream.
 func (m *Mux) OpenStream() (*Stream, error) {
 	m.mu.Lock()
-
-	s := &Stream{
-		m:    m,
-		id:   m.nextID,
-		cond: sync.Cond{L: new(sync.Mutex)},
-		err:  m.err, // stream is unusable if m.err is set
-	}
+	s := newStream(m.nextID, m)
 	m.streams[s.id] = s
-
-	// nextID will wraparound when it grows too large
-	m.nextID += 2
+	m.nextID += 2 // int wraparound intended
 	m.mu.Unlock()
 
-	// send First frame to tell peer the stream exists
+	// send flagOpenStream to tell peer the stream exists
 	h := frameHeader{
 		id:    s.id,
 		flags: flagOpenStream,
 	}
 
-	return s, s.m.bufferFrame(h, nil, s.wd)
+	return s, m.bufferFrame(h, nil, s.wd)
 }
 
 // newMux initializes a Mux and spawns its readLoop and writeLoop goroutines.
@@ -278,8 +266,8 @@ func newMux(conn net.Conn) *Mux {
 		writeBufA:  make([]byte, 0, maxFrameSize*10),
 		writeBufB:  make([]byte, 0, maxFrameSize*10),
 	}
-	m.writeBuf = m.writeBufA // initl writeBuf is A
-	m.sendBuf = m.writeBufB
+	m.writeBuf = m.writeBufA // initial writeBuf is A
+	m.sendBuf = m.writeBufB  // initial sendBuf is B
 	// both conds use the same mutex
 	m.cond.L = &m.mu
 	m.bufferCond.L = &m.mu
@@ -297,9 +285,6 @@ func Client(conn net.Conn) (*Mux, error) {
 // context expires, the Stream will be closed and any pending calls will return
 // ctx.Err(). DialStreamContext spawns a goroutine whose lifetime matches that
 // of the context.
-//
-// Unlike e.g. net.Dial, this does not perform any I/O; the peer will not be
-// aware of the new Stream until Write is called.
 func (m *Mux) OpenStreamContext(ctx context.Context) (*Stream, error) {
 	s, err := m.OpenStream()
 	go func() {

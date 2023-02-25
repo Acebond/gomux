@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"log"
 	"math"
 )
 
@@ -20,11 +21,13 @@ const (
 )
 
 const (
-	flagKeepalive   = 1 << iota // empty frame to keep connection open
-	flagOpenStream              // first frame in stream
-	flagCloseRead               // shuts down the reading side of the stream
-	flagCloseWrite              // shuts down the writing side of the stream
-	flagCloseStream             // stream is being closed gracefully
+	//flagData          // data frame
+	flagKeepalive    = 1 << iota // empty frame to keep connection open
+	flagOpenStream               // first frame in stream
+	flagCloseRead                // shuts down the reading side of the stream
+	flagCloseWrite               // shuts down the writing side of the stream
+	flagCloseStream              // stream is being closed gracefully
+	flagWindowUpdate             // Used to updated the senders receive window size
 )
 
 func encodeFrameHeader(buf []byte, h frameHeader) {
@@ -61,8 +64,14 @@ func (fr *frameReader) nextFrame() (frameHeader, []byte, error) {
 	}
 	h := decodeFrameHeader(fr.header)
 
-	if _, err := io.ReadFull(fr.reader, fr.payload[:h.length]); err != nil {
-		return frameHeader{}, nil, fmt.Errorf("could not read frame payload: %w", err)
+	log.Printf("Get frame ID (%v) (length=%v, flags=%v)", h.id, h.length, h.flags)
+
+	if h.flags == 0 {
+		if _, err := io.ReadFull(fr.reader, fr.payload[:h.length]); err != nil {
+			return frameHeader{}, nil, fmt.Errorf("could not read frame payload: %w", err)
+		}
+		return h, fr.payload[:h.length], nil
+	} else {
+		return h, nil, nil
 	}
-	return h, fr.payload[:h.length], nil
 }
