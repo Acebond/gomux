@@ -29,9 +29,9 @@ func newStream(id uint32, m *Mux) *Stream {
 		m:          m,
 		id:         id,
 		cond:       sync.Cond{L: new(sync.Mutex)},
-		err:        m.err, // stream is unusable if m.err is set
-		windowSize: maxPayloadSize,
-		readBuf:    ringbuffer.NewBuffer(maxPayloadSize), // must be same as windowSize
+		err:        m.err,
+		windowSize: windowSize,
+		readBuf:    ringbuffer.NewBuffer(windowSize), // must be same as windowSize
 	}
 }
 
@@ -92,7 +92,6 @@ func (s *Stream) consumeFrame(h frameHeader, payload []byte) {
 	case flagCloseStream:
 		s.err = ErrPeerClosedStream
 		s.cond.Broadcast() // wake Read/Write
-		//go s.delayedClose()
 		s.m.mu.Lock()
 		delete(s.m.streams, s.id) // delete stream from Mux
 		s.m.mu.Unlock()
@@ -123,11 +122,15 @@ func (s *Stream) Read(p []byte) (int, error) {
 		s.cond.Wait()
 	}
 
-	n, _ := s.readBuf.Read(p)
+	n, readErr := s.readBuf.Read(p)
 
 	if s.err != nil {
 		if s.err == ErrPeerClosedStream {
-			return n, io.EOF
+			if readErr == io.EOF {
+				return n, io.EOF
+			} else {
+				return n, nil
+			}
 		}
 		return n, s.err
 	} else if s.rc {

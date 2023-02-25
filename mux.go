@@ -199,9 +199,8 @@ func (m *Mux) readLoop() {
 			m.mu.Unlock()
 			if found {
 				curStream.consumeFrame(h, payload)
-			} else {
-				// log.Printf("Received frame for assumed to be closed stream. (id=%v, length=%v, flags=%v)", h.id, h.length, h.flags)
 			}
+			// else received frame for assumed to be closed stream so ignore it.
 		}
 	}
 }
@@ -255,8 +254,8 @@ func newMux(conn net.Conn) *Mux {
 		conn:       conn,
 		streams:    make(map[uint32]*Stream),
 		acceptChan: make(chan *Stream, 256),
-		writeBufA:  make([]byte, 0, maxFrameSize*10),
-		writeBufB:  make([]byte, 0, maxFrameSize*10),
+		writeBufA:  make([]byte, 0, writeBufferSize),
+		writeBufB:  make([]byte, 0, writeBufferSize),
 	}
 	m.writeBuf = m.writeBufA // initial writeBuf is writeBufA
 	m.sendBuf = m.writeBufB  // initial sendBuf is writeBufB

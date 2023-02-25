@@ -17,6 +17,8 @@ const (
 	frameHeaderSize = 4 + 2 + 2
 	maxPayloadSize  = math.MaxUint16
 	maxFrameSize    = frameHeaderSize + maxPayloadSize
+	writeBufferSize = maxFrameSize * 10
+	windowSize      = maxPayloadSize
 )
 
 const (
