@@ -107,7 +107,7 @@ func (b *Buffer) copyFromBuffer(p []byte, start int) {
 }
 func min(n, m int) int {
 	if n <= m {
-		return int(n)
+		return n
 	}
 	return m
 }

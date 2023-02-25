@@ -131,20 +131,19 @@ func (s *Stream) Read(p []byte) (int, error) {
 	for s.readBuf.Len() == 0 && s.err == nil && !s.rc && (s.rd.IsZero() || time.Now().Before(s.rd)) {
 		s.cond.Wait()
 	}
-	if s.err != nil {
-		if s.err == ErrPeerClosedStream {
-			return 0, io.EOF
-		}
-		return 0, s.err
-	} else if s.rc {
-		return 0, io.EOF
-	} else if !s.rd.IsZero() && !time.Now().Before(s.rd) {
-		return 0, os.ErrDeadlineExceeded
-	}
 
 	n, _ := s.readBuf.Read(p)
 
-	s.cond.Broadcast() // wake delayedClose()
+	if s.err != nil {
+		if s.err == ErrPeerClosedStream {
+			return n, io.EOF
+		}
+		return n, s.err
+	} else if s.rc {
+		return n, io.EOF
+	} else if !s.rd.IsZero() && !time.Now().Before(s.rd) {
+		return n, os.ErrDeadlineExceeded
+	}
 
 	// tell sender bytes have been consumed
 	h := frameHeader{
@@ -152,8 +151,7 @@ func (s *Stream) Read(p []byte) (int, error) {
 		length: uint16(n),
 		flags:  flagWindowUpdate,
 	}
-	err := s.m.bufferFrame(h, nil, s.rd)
-	return n, err
+	return n, s.m.bufferFrame(h, nil, s.rd)
 }
 
 // Write writes data to the Stream.
