@@ -3,7 +3,6 @@ package gomux
 import (
 	"errors"
 	"net"
-	"os"
 	"sync"
 	"time"
 )
@@ -30,7 +29,8 @@ type Mux struct {
 	conn       net.Conn
 	acceptChan chan *Stream
 	mu         sync.Mutex // all subsequent fields are guarded by mu
-	cond       sync.Cond
+	writeCond  sync.Cond
+	bufferCond sync.Cond // separate cond for waking a single bufferFrame
 	streams    map[uint32]*Stream
 	nextID     uint32
 	err        error // sticky and fatal
@@ -38,7 +38,6 @@ type Mux struct {
 	sendBuf    []byte
 	writeBufA  []byte
 	writeBufB  []byte
-	bufferCond sync.Cond // separate cond for waking a single bufferFrame
 }
 
 // setErr sets the Mux error and wakes up all Mux-related goroutines. If m.err
@@ -59,51 +58,30 @@ func (m *Mux) setErr(err error) error {
 		s.cond.L.Unlock()
 	}
 	m.conn.Close()
-	m.cond.Broadcast()
+	m.writeCond.Signal()
 	m.bufferCond.Broadcast()
 	close(m.acceptChan)
 	return err
 }
 
 // bufferFrame blocks until it can store its frame in m.writeBuf. It returns
-// early with an error if m.err is set or if the deadline expires.
-func (m *Mux) bufferFrame(h frameHeader, payload []byte, deadline time.Time) error {
+// early with an error if m.err is set.
+func (m *Mux) bufferFrame(h frameHeader, payload []byte) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if !deadline.IsZero() {
-		if !time.Now().Before(deadline) {
-			return os.ErrDeadlineExceeded
-		}
-		timer := time.AfterFunc(time.Until(deadline), m.bufferCond.Broadcast) // nice
-		defer timer.Stop()
-	}
+
 	// block until we can add the frame to the buffer
-	for len(m.writeBuf)+frameHeaderSize+len(payload) > cap(m.writeBuf) && m.err == nil && (deadline.IsZero() || time.Now().Before(deadline)) {
+	for len(m.writeBuf)+frameHeaderSize+len(payload) > cap(m.writeBuf) && m.err == nil {
 		m.bufferCond.Wait()
 	}
 	if m.err != nil {
 		return m.err
-	} else if !deadline.IsZero() && !time.Now().Before(deadline) {
-		return os.ErrDeadlineExceeded
 	}
 	// queue our frame and wake the writeLoop
-	//
-	// NOTE: it is not necessary to wait for the writeLoop to flush our frame.
-	// After all, a successful write() syscall doesn't mean that the peer
-	// actually received the data, just that the packets are sitting in a kernel
-	// buffer somewhere.
 	m.writeBuf = appendFrame(m.writeBuf, h, payload)
-	m.cond.Broadcast()
+	m.writeCond.Signal()
 
 	// wake at most one bufferFrame call
-	//
-	// NOTE: it's possible that we'll wake the "wrong" bufferFrame call, i.e.
-	// one whose payload is too large to fit in the buffer. This means we won't
-	// buffer any additional frames until the writeLoop flushes the buffer.
-	// Calling Broadcast instead of Signal prevents this, but also incurs a
-	// massive performance penalty when there are many concurrent streams. We
-	// could probably get the best of both worlds with a more sophisticated
-	// buffering strategy, but the current implementation is fast enough.
 	m.bufferCond.Signal()
 	return nil
 }
@@ -115,13 +93,13 @@ func (m *Mux) writeLoop() {
 	// wake cond whenever a keepalive is due
 	keepaliveInterval := time.Minute * 10
 	nextKeepalive := time.Now().Add(keepaliveInterval)
-	timer := time.AfterFunc(keepaliveInterval, m.cond.Broadcast)
+	timer := time.AfterFunc(keepaliveInterval, m.writeCond.Signal)
 	defer timer.Stop()
 
 	for {
 		m.mu.Lock()
 		for len(m.writeBuf) == 0 && m.err == nil && time.Now().Before(nextKeepalive) {
-			m.cond.Wait()
+			m.writeCond.Wait()
 		}
 		if m.err != nil {
 			m.mu.Unlock()
@@ -209,7 +187,7 @@ func (m *Mux) readLoop() {
 func (m *Mux) Close() error {
 	// tell perr we are shutting down
 	h := frameHeader{flags: flagCloseMux}
-	m.bufferFrame(h, nil, time.Time{})
+	m.bufferFrame(h, nil)
 
 	// if there's a buffered Write, wait for it to be sent
 	m.mu.Lock()
@@ -245,7 +223,7 @@ func (m *Mux) OpenStream() (*Stream, error) {
 		id:    s.id,
 		flags: flagOpenStream,
 	}
-	return s, m.bufferFrame(h, nil, s.wd)
+	return s, m.bufferFrame(h, nil)
 }
 
 // newMux initializes a Mux and spawns its readLoop and writeLoop goroutines.
@@ -260,7 +238,7 @@ func newMux(conn net.Conn) *Mux {
 	m.writeBuf = m.writeBufA // initial writeBuf is writeBufA
 	m.sendBuf = m.writeBufB  // initial sendBuf is writeBufB
 	// both conds use the same mutex
-	m.cond.L = &m.mu
+	m.writeCond.L = &m.mu
 	m.bufferCond.L = &m.mu
 	go m.readLoop()
 	go m.writeLoop()

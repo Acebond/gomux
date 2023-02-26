@@ -107,9 +107,21 @@ func (s *Stream) consumeFrame(h frameHeader, payload []byte) {
 }
 
 // Read reads data from the Stream.
-func (s *Stream) Read(p []byte) (int, error) {
+func (s *Stream) Read(p []byte) (n int, err error) {
 	s.cond.L.Lock()
 	defer s.cond.L.Unlock()
+
+	defer func() {
+		if err == nil && n > 0 {
+			// Tell sender bytes have been consumed
+			h := frameHeader{
+				id:     s.id,
+				length: uint16(n),
+				flags:  flagWindowUpdate,
+			}
+			s.m.bufferFrame(h, nil)
+		}
+	}()
 
 	if !s.rd.IsZero() {
 		if !time.Now().Before(s.rd) {
@@ -118,34 +130,29 @@ func (s *Stream) Read(p []byte) (int, error) {
 		timer := time.AfterFunc(time.Until(s.rd), s.cond.Broadcast)
 		defer timer.Stop()
 	}
+
 	for s.readBuf.Len() == 0 && s.err == nil && !s.rc && (s.rd.IsZero() || time.Now().Before(s.rd)) {
 		s.cond.Wait()
 	}
 
-	n, readErr := s.readBuf.Read(p)
-
-	if s.err != nil {
+	// Determine how we left the for loop. If data has been buffered it always
+	// takes precedence over errors. This is because a sender could have sent
+	// some data then closed the stream. We want to return the data before
+	// indicating the closure of the stream to keep the order of events correct.
+	if s.readBuf.Len() > 0 {
+		n, _ := s.readBuf.Read(p)
+		return n, nil
+	} else if s.err != nil {
 		if s.err == ErrPeerClosedStream {
-			if readErr == io.EOF {
-				return n, io.EOF
-			} else {
-				return n, nil
-			}
+			return 0, io.EOF
 		}
-		return n, s.err
+		return 0, s.err
 	} else if s.rc {
-		return n, io.EOF
+		return 0, io.EOF
 	} else if !s.rd.IsZero() && !time.Now().Before(s.rd) {
-		return n, os.ErrDeadlineExceeded
+		return 0, os.ErrDeadlineExceeded
 	}
-
-	// tell sender bytes have been consumed
-	h := frameHeader{
-		id:     s.id,
-		length: uint16(n),
-		flags:  flagWindowUpdate,
-	}
-	return n, s.m.bufferFrame(h, nil, s.rd)
+	panic("impossible")
 }
 
 // Write writes data to the Stream.
@@ -166,18 +173,21 @@ func (s *Stream) Write(p []byte) (int, error) {
 			s.cond.Wait()
 		}
 
+		// Determine how we left the for loop.
 		if s.err != nil {
 			return len(p) - buf.Len() - len(payload), s.err
 		} else if s.wc {
 			return len(p) - buf.Len() - len(payload), ErrWriteClosed
+		} else if !s.wd.IsZero() && !time.Now().Before(s.wd) {
+			return 0, os.ErrDeadlineExceeded
 		}
 
 		// write next frame's worth of data
-		s.windowSize -= h.length
-		err := s.m.bufferFrame(h, payload, s.wd)
+		err := s.m.bufferFrame(h, payload)
 		if err != nil {
 			return len(p) - buf.Len() - len(payload), err
 		}
+		s.windowSize -= h.length
 	}
 	return len(p), nil
 }
@@ -202,7 +212,7 @@ func (s *Stream) Close() error {
 		id:    s.id,
 		flags: flagCloseStream,
 	}
-	err := s.m.bufferFrame(h, nil, s.wd)
+	err := s.m.bufferFrame(h, nil)
 	if err != nil && err != ErrPeerClosedStream {
 		return err
 	}
@@ -225,7 +235,7 @@ func (s *Stream) CloseWrite() error {
 		id:    s.id,
 		flags: flagCloseRead,
 	}
-	return s.m.bufferFrame(h, nil, s.wd)
+	return s.m.bufferFrame(h, nil)
 }
 
 // CloseRead shuts down the reading side of the stream. Most callers should just use Close.
@@ -239,7 +249,7 @@ func (s *Stream) CloseRead() error {
 		id:    s.id,
 		flags: flagCloseWrite,
 	}
-	return s.m.bufferFrame(h, nil, s.wd)
+	return s.m.bufferFrame(h, nil)
 }
 
 var _ net.Conn = (*Stream)(nil)
