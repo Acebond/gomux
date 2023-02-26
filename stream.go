@@ -19,7 +19,7 @@ type Stream struct {
 	cond       sync.Cond // guards + synchronizes subsequent fields
 	rc, wc     bool      // read closed, write closed
 	err        error
-	windowSize uint16
+	windowSize uint32
 	readBuf    *ringbuffer.Buffer
 	rd, wd     time.Time // deadlines
 }
@@ -116,7 +116,7 @@ func (s *Stream) Read(p []byte) (n int, err error) {
 			// Tell sender bytes have been consumed
 			h := frameHeader{
 				id:     s.id,
-				length: uint16(n),
+				length: uint32(n),
 				flags:  flagWindowUpdate,
 			}
 			s.m.bufferFrame(h, nil)
@@ -166,7 +166,7 @@ func (s *Stream) Write(p []byte) (int, error) {
 		payload := buf.Next(maxPayloadSize)
 		h := frameHeader{
 			id:     s.id,
-			length: uint16(len(payload)),
+			length: uint32(len(payload)),
 		}
 
 		for h.length > s.windowSize && s.err == nil && !s.wc && (s.wd.IsZero() || time.Now().Before(s.wd)) {
