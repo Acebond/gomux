@@ -4,7 +4,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
-	"math"
 )
 
 type frameHeader struct {
@@ -14,11 +13,11 @@ type frameHeader struct {
 }
 
 const (
-	frameHeaderSize = 4 + 2 + 2 // uint32 + (uint24 + uint8)
-	maxPayloadSize  = math.MaxUint16
-	maxFrameSize    = frameHeaderSize + maxPayloadSize
-	writeBufferSize = maxFrameSize * 10
-	windowSize      = maxPayloadSize
+	frameHeaderSize = 4 + 2 + 2                        // uint32 + (uint24 + uint8)
+	maxPayloadSize  = 1 << 16                          // must be < 2 ^ 24
+	maxFrameSize    = frameHeaderSize + maxPayloadSize // must be frameHeaderSize + maxPayloadSize
+	writeBufferSize = maxFrameSize * 10                // must be >= maxFrameSize
+	windowSize      = maxPayloadSize                   // must be >= maxPayloadSize
 )
 
 const (
@@ -65,7 +64,7 @@ func (fr *frameReader) nextFrame() (frameHeader, []byte, error) {
 	}
 	h := decodeFrameHeader(fr.header)
 
-	if h.flags == 0 {
+	if h.flags == flagData {
 		if _, err := io.ReadFull(fr.reader, fr.payload[:h.length]); err != nil {
 			return frameHeader{}, nil, fmt.Errorf("could not read frame payload: %w", err)
 		}

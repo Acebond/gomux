@@ -10,27 +10,32 @@ A gomux session is an exchange of *frames* between two peers over a shared conne
 
 All integers in this spec are little-endian.
 
-A frame consists of a *frame header* followed by a payload. A header is:
+A frame consists of a *frame header* followed by a payload. A header is 8 bytes and defined as:
 
-| Length | Type   | Description    |
-|--------|--------|----------------|
-|   4    | uint32 | ID             |
-|   2    | uint16 | Payload length |
-|   2    | uint16 | Flags          |
+| Bits | Type   | Description |
+|------|--------|-------------|
+| 32   | uint32 | ID          |
+| 24   | uint24 | Length      |
+| 8    | uint8  | Flags       |
 
 The ID specifies which *stream* a frame belongs to. Streams are numbered sequentially, starting at 0. To prevent collisions, streams initiated by the client peer use even IDs, while the server peer uses odd IDs.
 
-The payload length specifies the length of the payload.
+The length specifies the length of the payload or window update.
 
-The flags are mutually exclusive and defined as:
+The flags are defined as:
 
-| Bit | Description           |
-|-----|-----------------------|
-|  0  | Keepalive             |
-|  1  | OpenStream            |
-|  2  | CloseRead             |
-|  3  | CloseWrite            |
-|  4  | CloseStream           |
+| Value | Description           |
+|-------|-----------------------|
+|   0   | Data                  |
+|   1   | Keepalive             |
+|   2   | OpenStream            |
+|   3   | CloseRead             |
+|   4   | CloseWrite            |
+|   5   | CloseStream           |
+|   6   | WindowUpdate          |
+|   7   | CloseMux              |
+
+The "Data" flag indicates a payload of size length follows the frame.
 
 The "Keepalive" flag indicates a keepalive frame. Keepalives contain no payload and merely serve to keep the underlying connection open.
 
@@ -41,6 +46,8 @@ The "CloseRead" flag shuts down the reading side of the stream.
 The "CloseWrite" flag shuts down the writing side of the stream.
 
 The "CloseStream" flag indicates that the stream has been closed by the peer.
+
+The "WindowUpdate" flag indicates to the peer that length bytes have been read from the read buffer.
 
 ## Benchmark
 Gomux on an i5-13600K can transfer approximately 4500 MB/s. The number of streams does not impact performance. 

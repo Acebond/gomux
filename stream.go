@@ -100,7 +100,7 @@ func (s *Stream) consumeFrame(h frameHeader, payload []byte) {
 		s.windowSize += h.length
 		s.cond.Broadcast() // wake Write
 
-	case 0:
+	case flagData:
 		s.readBuf.Write(payload)
 		s.cond.Broadcast() // wake Read
 	}
