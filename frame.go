@@ -4,44 +4,43 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
-	"math"
 )
 
 type frameHeader struct {
 	id     uint32
-	length uint16
-	flags  uint16
+	length uint32
+	flags  uint8
 }
 
 const (
-	frameHeaderSize = 4 + 2 + 2 // sizeof(uint32) + sizeof(uint16) + sizeof(uint16)
-	maxPayloadSize  = math.MaxUint16
-	maxFrameSize    = frameHeaderSize + maxPayloadSize
-	writeBufferSize = maxFrameSize * 10
-	windowSize      = maxPayloadSize
+	frameHeaderSize = 4 + 2 + 2                        // uint32 + (uint24 + uint8)
+	maxPayloadSize  = 1 << 16                          // must be < 2 ^ 24
+	maxFrameSize    = frameHeaderSize + maxPayloadSize // must be frameHeaderSize + maxPayloadSize
+	writeBufferSize = maxFrameSize * 10                // must be >= maxFrameSize
+	windowSize      = maxPayloadSize                   // must be >= maxPayloadSize
 )
 
 const (
-	flagKeepalive    = 1 << iota // empty frame to keep connection open
-	flagOpenStream               // first frame in stream
-	flagCloseRead                // shuts down the reading side of the stream
-	flagCloseWrite               // shuts down the writing side of the stream
-	flagCloseStream              // stream is being closed gracefully
-	flagWindowUpdate             // used to updated the read window size
-	flagCloseMux                 // mux is being closed gracefully
+	flagData         = iota // data frame
+	flagKeepalive           // empty frame to keep connection open
+	flagOpenStream          // first frame in stream
+	flagCloseRead           // shuts down the reading side of the stream
+	flagCloseWrite          // shuts down the writing side of the stream
+	flagCloseStream         // stream is being closed gracefully
+	flagWindowUpdate        // used to updated the read window size
+	flagCloseMux            // mux is being closed gracefully
 )
 
 func encodeFrameHeader(buf []byte, h frameHeader) {
 	binary.LittleEndian.PutUint32(buf[0:], h.id)
-	binary.LittleEndian.PutUint16(buf[4:], h.length)
-	binary.LittleEndian.PutUint16(buf[6:], h.flags)
+	binary.LittleEndian.PutUint32(buf[4:], h.length|uint32(h.flags)<<24)
 }
 
-func decodeFrameHeader(buf []byte) frameHeader {
+func decodeFrameHeader(buf []byte) (h frameHeader) {
 	return frameHeader{
-		id:     binary.LittleEndian.Uint32(buf[0:]),
-		length: binary.LittleEndian.Uint16(buf[4:]),
-		flags:  binary.LittleEndian.Uint16(buf[6:]),
+		id:     uint32(buf[0]) | uint32(buf[1])<<8 | uint32(buf[2])<<16 | uint32(buf[3])<<24,
+		length: uint32(buf[4]) | uint32(buf[5])<<8 | uint32(buf[6])<<16,
+		flags:  buf[7],
 	}
 }
 
@@ -65,7 +64,7 @@ func (fr *frameReader) nextFrame() (frameHeader, []byte, error) {
 	}
 	h := decodeFrameHeader(fr.header)
 
-	if h.flags == 0 {
+	if h.flags == flagData {
 		if _, err := io.ReadFull(fr.reader, fr.payload[:h.length]); err != nil {
 			return frameHeader{}, nil, fmt.Errorf("could not read frame payload: %w", err)
 		}
