@@ -14,7 +14,7 @@ import (
 // A Stream is a duplex connection multiplexed over a net.Conn. It implements
 // the net.Conn interface.
 type Stream struct {
-	m          *Mux
+	mux        *Mux
 	id         uint32
 	cond       sync.Cond // guards + synchronizes subsequent fields
 	rc, wc     bool      // read closed, write closed
@@ -26,7 +26,7 @@ type Stream struct {
 
 func newStream(id uint32, m *Mux) *Stream {
 	return &Stream{
-		m:          m,
+		mux:        m,
 		id:         id,
 		cond:       sync.Cond{L: new(sync.Mutex)},
 		err:        m.err,
@@ -36,10 +36,10 @@ func newStream(id uint32, m *Mux) *Stream {
 }
 
 // LocalAddr returns the underlying connection's LocalAddr.
-func (s *Stream) LocalAddr() net.Addr { return s.m.conn.LocalAddr() }
+func (s *Stream) LocalAddr() net.Addr { return s.mux.conn.LocalAddr() }
 
 // RemoteAddr returns the underlying connection's RemoteAddr.
-func (s *Stream) RemoteAddr() net.Addr { return s.m.conn.RemoteAddr() }
+func (s *Stream) RemoteAddr() net.Addr { return s.mux.conn.RemoteAddr() }
 
 // SetDeadline sets the read and write deadlines associated with the Stream. It
 // is equivalent to calling both SetReadDeadline and SetWriteDeadline.
@@ -87,23 +87,19 @@ func (s *Stream) consumeFrame(h frameHeader, payload []byte) {
 
 	case flagCloseRead:
 		s.rc = true
-		s.cond.Broadcast() // wake Read
 
 	case flagCloseStream:
 		s.err = ErrPeerClosedStream
-		s.cond.Broadcast() // wake Read/Write
-		s.m.mu.Lock()
-		delete(s.m.streams, s.id) // delete stream from Mux
-		s.m.mu.Unlock()
+		s.mux.deleteStream(s.id)
 
 	case flagWindowUpdate:
 		s.windowSize += h.length
-		s.cond.Broadcast() // wake Write
 
 	case flagData:
 		s.readBuf.Write(payload)
-		s.cond.Broadcast() // wake Read
 	}
+
+	s.cond.Broadcast() // wake Read/Write
 }
 
 // Read reads data from the Stream.
@@ -119,7 +115,7 @@ func (s *Stream) Read(p []byte) (n int, err error) {
 				length: uint32(n),
 				flags:  flagWindowUpdate,
 			}
-			s.m.bufferFrame(h, nil)
+			s.mux.bufferFrame(h, nil)
 		}
 	}()
 
@@ -183,7 +179,7 @@ func (s *Stream) Write(p []byte) (int, error) {
 		}
 
 		// write next frame's worth of data
-		err := s.m.bufferFrame(h, payload)
+		err := s.mux.bufferFrame(h, payload)
 		if err != nil {
 			return len(p) - buf.Len() - len(payload), err
 		}
@@ -212,15 +208,13 @@ func (s *Stream) Close() error {
 		id:    s.id,
 		flags: flagCloseStream,
 	}
-	err := s.m.bufferFrame(h, nil)
+	err := s.mux.bufferFrame(h, nil)
 	if err != nil && err != ErrPeerClosedStream {
 		return err
 	}
 
 	// delete stream from Mux
-	s.m.mu.Lock()
-	delete(s.m.streams, s.id)
-	s.m.mu.Unlock()
+	s.mux.deleteStream(s.id)
 	return nil
 }
 
@@ -235,7 +229,7 @@ func (s *Stream) CloseWrite() error {
 		id:    s.id,
 		flags: flagCloseRead,
 	}
-	return s.m.bufferFrame(h, nil)
+	return s.mux.bufferFrame(h, nil)
 }
 
 // CloseRead shuts down the reading side of the stream. Most callers should just use Close.
@@ -249,7 +243,7 @@ func (s *Stream) CloseRead() error {
 		id:    s.id,
 		flags: flagCloseWrite,
 	}
-	return s.m.bufferFrame(h, nil)
+	return s.mux.bufferFrame(h, nil)
 }
 
 var _ net.Conn = (*Stream)(nil)

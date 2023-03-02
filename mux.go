@@ -137,6 +137,13 @@ func (m *Mux) writeLoop() {
 	}
 }
 
+// Delete stream from Mux
+func (m *Mux) deleteStream(id uint32) {
+	m.mu.Lock()
+	delete(m.streams, id)
+	m.mu.Unlock()
+}
+
 // readLoop handles the actual Reads from the Mux's net.Conn. It waits for a
 // frame to arrive, then routes it to the appropriate Stream, creating a new
 // Stream if none exists.
@@ -173,10 +180,10 @@ func (m *Mux) readLoop() {
 
 		default:
 			m.mu.Lock()
-			curStream, found := m.streams[h.id]
+			stream, found := m.streams[h.id]
 			m.mu.Unlock()
 			if found {
-				curStream.consumeFrame(h, payload)
+				stream.consumeFrame(h, payload)
 			}
 			// else received frame for assumed to be closed stream so ignore it.
 		}
