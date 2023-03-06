@@ -1,12 +1,10 @@
 package ringbuffer
 
 import (
-	"fmt"
 	"io"
 )
 
 // Buffer is a simple implementation of a ring/circular buffer.
-// See https://en.wikipedia.org/wiki/Circular_buffer for more details.
 type Buffer struct {
 	buf []byte
 	// Picture [read, write] as a sliding window. These values grow without
@@ -17,10 +15,7 @@ type Buffer struct {
 }
 
 // NewBuffer returns a ring buffer of a given size.
-func NewBuffer(size int) *Buffer {
-	if size <= 0 {
-		panic(fmt.Sprintf("size was %d; must be positive", size))
-	}
+func NewBuffer(size uint) *Buffer {
 	return &Buffer{
 		buf: make([]byte, size),
 	}
@@ -29,7 +24,7 @@ func NewBuffer(size int) *Buffer {
 // Read reads from the buffer, returning io.EOF if it has read up until where
 // it has written.
 func (b *Buffer) Read(p []byte) (int, error) {
-	maxBytes := min(len(p), b.write-b.read)
+	maxBytes := min(len(p), b.Len())
 	b.copyToBuffer(p[:maxBytes], b.read)
 	b.read += maxBytes
 	if maxBytes == 0 {
@@ -43,10 +38,7 @@ func (b *Buffer) Read(p []byte) (int, error) {
 // size of the buffer.
 func (b *Buffer) Write(p []byte) (int, error) {
 	total := len(p)
-	for {
-		if len(p) == 0 {
-			break
-		}
+	for len(p) != 0 {
 		// We don't want b.write to get more then len(b.buf) ahead of b.read; we
 		// read as much as possible taking that into account.
 		maxBytes := min(len(p), len(b.buf)-(b.write-b.read))
@@ -59,16 +51,8 @@ func (b *Buffer) Write(p []byte) (int, error) {
 		b.copyFromBuffer(p[:maxBytes], b.write)
 		b.write += maxBytes
 		p = p[maxBytes:]
-
 	}
 	return total, nil
-}
-
-// Bytes returns the unread bytes in the buffer.
-func (b *Buffer) Bytes() []byte {
-	p := make([]byte, b.write-b.read)
-	b.copyToBuffer(p, b.read)
-	return p
 }
 
 func (b *Buffer) Len() int {
