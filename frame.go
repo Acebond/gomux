@@ -65,11 +65,14 @@ func (fr *frameReader) nextFrame() (frameHeader, []byte, error) {
 	h := decodeFrameHeader(fr.header)
 
 	if h.flags == flagData {
+		if h.length > maxPayloadSize {
+			return frameHeader{}, nil, fmt.Errorf("header length (%v) > maxPayloadSize (%v)", h.length, maxPayloadSize)
+		}
 		if _, err := io.ReadFull(fr.reader, fr.payload[:h.length]); err != nil {
 			return frameHeader{}, nil, fmt.Errorf("could not read frame payload: %w", err)
 		}
 		return h, fr.payload[:h.length], nil
-	} else {
-		return h, nil, nil
 	}
+
+	return h, nil, nil
 }
