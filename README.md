@@ -12,15 +12,11 @@ All integers in this spec are little-endian.
 
 A frame consists of a *frame header* followed by a payload. A header is 8 bytes and defined as:
 
-| Bits | Type   | Description |
-|------|--------|-------------|
-| 32   | uint32 | ID          |
-| 24   | uint24 | Length      |
-| 8    | uint8  | Flags       |
-
-The ID specifies which *stream* a frame belongs to. Streams are numbered sequentially, starting at 0. To prevent collisions, streams initiated by the client peer use even IDs, while the server peer uses odd IDs.
-
-The length specifies the length of the payload or window update.
+| Bits | Type   | Name     | Description |
+|------|--------|----------|-------------|
+| 32   | uint32 | ID       | The ID specifies which *stream* a frame belongs to. Streams are numbered sequentially, starting at 0. To prevent collisions, streams initiated by the client peer use even IDs, while the server peer uses odd IDs. |
+| 24   | uint24 | Length   | The length specifies the length of the payload or window update. |
+| 8    | uint8  | Flags    | Determines the type of frame and how it should be processed.
 
 The flags are defined as:
 

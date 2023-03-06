@@ -8,7 +8,7 @@ import (
 
 type frameHeader struct {
 	id     uint32
-	length uint32
+	length uint32 // only first 24 bits are used
 	flags  uint8
 }
 
