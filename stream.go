@@ -31,7 +31,7 @@ func newStream(id uint32, m *Mux) *Stream {
 		cond:       sync.Cond{L: new(sync.Mutex)},
 		err:        m.err,
 		windowSize: windowSize,
-		readBuf:    ringbuffer.NewBuffer(windowSize), // must be same as windowSize
+		readBuf:    ringbuffer.NewBuffer(windowSize),
 	}
 }
 
@@ -166,6 +166,14 @@ func (s *Stream) Read(p []byte) (n int, err error) {
 func (s *Stream) Write(p []byte) (int, error) {
 	s.cond.L.Lock()
 	defer s.cond.L.Unlock()
+
+	if !s.wd.IsZero() {
+		if !time.Now().Before(s.wd) {
+			return 0, os.ErrDeadlineExceeded
+		}
+		timer := time.AfterFunc(time.Until(s.wd), s.cond.Broadcast)
+		defer timer.Stop()
+	}
 
 	buf := bytes.NewBuffer(p)
 	for buf.Len() > 0 {

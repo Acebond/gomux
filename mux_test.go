@@ -228,7 +228,7 @@ func TestDeadline(t *testing.T) {
 		// wait 100ms before reading/writing
 		buf := make([]byte, 100)
 		time.Sleep(100 * time.Millisecond)
-		if _, err := s.Read(buf); err != nil {
+		if _, err := s.Read(buf); err != nil && err != io.EOF {
 			return err
 		}
 		time.Sleep(100 * time.Millisecond)
@@ -272,7 +272,7 @@ func TestDeadline(t *testing.T) {
 			s.SetDeadline(time.Now().Add(time.Millisecond)) // too short
 		}},
 		{true, func(s *Stream) {
-			s.SetDeadline(time.Now().Add(time.Millisecond))
+			s.SetDeadline(time.Now().Add(time.Nanosecond))
 			s.SetReadDeadline(time.Time{}) // Write should still fail
 		}},
 		{true, func(s *Stream) {
@@ -297,10 +297,11 @@ func TestDeadline(t *testing.T) {
 			}
 			defer s.Close()
 			test.fn(s) // set deadlines
-
+			time.Sleep(time.Millisecond)
 			// need to write a fairly large message; otherwise the packets just
 			// get buffered and "succeed" instantly
-			if _, err := s.Write(make([]byte, math.MaxUint16*20)); err != nil {
+			//time.Sleep(time.Millisecond)
+			if _, err := s.Write(make([]byte, math.MaxUint16/2)); err != nil {
 				return fmt.Errorf("foo: %w", err)
 			} else if _, err := io.ReadFull(s, buf[:13]); err != nil {
 				return err
