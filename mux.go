@@ -54,8 +54,8 @@ func (m *Mux) setErr(err error) error {
 	for _, s := range m.streams {
 		s.cond.L.Lock()
 		s.err = err
-		s.cond.Broadcast()
 		s.cond.L.Unlock()
+		s.cond.Broadcast()
 	}
 	m.conn.Close()
 	m.writeCond.Signal()
@@ -118,8 +118,8 @@ func (m *Mux) writeLoop() {
 		m.writeBuf, m.sendBuf = m.sendBuf, m.writeBuf
 
 		// wake at most one bufferFrame call
-		m.bufferCond.Signal()
 		m.mu.Unlock()
+		m.bufferCond.Signal()
 
 		// reset keepalive timer
 		timer.Stop()

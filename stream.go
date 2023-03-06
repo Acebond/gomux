@@ -59,8 +59,8 @@ func (s *Stream) SetDeadline(t time.Time) error {
 // setting a new deadline does not affect pending Read calls, only future calls.
 func (s *Stream) SetReadDeadline(t time.Time) error {
 	s.cond.L.Lock()
-	defer s.cond.L.Unlock()
 	s.rd = t
+	s.cond.L.Unlock()
 	return nil
 }
 
@@ -71,15 +71,14 @@ func (s *Stream) SetReadDeadline(t time.Time) error {
 // calls.
 func (s *Stream) SetWriteDeadline(t time.Time) error {
 	s.cond.L.Lock()
-	defer s.cond.L.Unlock()
 	s.wd = t
+	s.cond.L.Unlock()
 	return nil
 }
 
 // consumeFrame processes a frame based on h.flags.
 func (s *Stream) consumeFrame(h frameHeader, payload []byte) {
 	s.cond.L.Lock()
-	defer s.cond.L.Unlock()
 
 	switch h.flags {
 	case flagCloseWrite:
@@ -98,7 +97,7 @@ func (s *Stream) consumeFrame(h frameHeader, payload []byte) {
 	case flagData:
 		s.readBuf.Write(payload)
 	}
-
+	s.cond.L.Unlock()
 	s.cond.Broadcast() // wake Read/Write
 }
 
@@ -106,18 +105,6 @@ func (s *Stream) consumeFrame(h frameHeader, payload []byte) {
 func (s *Stream) Read(p []byte) (n int, err error) {
 	s.cond.L.Lock()
 	defer s.cond.L.Unlock()
-
-	defer func() {
-		if err == nil && n > 0 {
-			// Tell sender bytes have been consumed
-			h := frameHeader{
-				id:     s.id,
-				length: uint32(n),
-				flags:  flagWindowUpdate,
-			}
-			s.mux.bufferFrame(h, nil)
-		}
-	}()
 
 	if !s.rd.IsZero() {
 		if !time.Now().Before(s.rd) {
@@ -127,28 +114,52 @@ func (s *Stream) Read(p []byte) (n int, err error) {
 		defer timer.Stop()
 	}
 
+	// Wait for data, an error, stream close, or timeout.
 	for s.readBuf.Len() == 0 && s.err == nil && !s.rc && (s.rd.IsZero() || time.Now().Before(s.rd)) {
 		s.cond.Wait()
 	}
 
-	// Determine how we left the for loop. If data has been buffered it always
-	// takes precedence over errors. This is because a sender could have sent
-	// some data then closed the stream. We want to return the data before
-	// indicating the closure of the stream to keep the order of events correct.
+	// A sender could have sent some data then closed the stream. We want to
+	// return the data before indicating the closure of the stream to keep the
+	// order of events correct.
 	if s.readBuf.Len() > 0 {
-		n, _ := s.readBuf.Read(p)
-		return n, nil
-	} else if s.err != nil {
-		if s.err == ErrPeerClosedStream {
-			return 0, io.EOF
-		}
-		return 0, s.err
-	} else if s.rc {
-		return 0, io.EOF
-	} else if !s.rd.IsZero() && !time.Now().Before(s.rd) {
-		return 0, os.ErrDeadlineExceeded
+		n, _ = s.readBuf.Read(p)
 	}
-	panic("impossible")
+
+	// Check for errors. There is a very unlikely chance that between leaving
+	// the for loop and checking the deadline it expires. We skip checking the
+	// deadline if data has been received.
+	if s.err != nil && s.err == ErrPeerClosedStream {
+		err = io.EOF
+	} else if s.err != nil {
+		err = s.err
+	} else if s.rc {
+		err = io.EOF
+	} else if n == 0 && !s.rd.IsZero() && !time.Now().Before(s.rd) {
+		err = os.ErrDeadlineExceeded
+	}
+
+	// Tell sender bytes have been consumed if no error. An error would indicate
+	// that s.err is set (the stream is doomed) or s.rc is set (no more data
+	// will ever be sent).
+	if n > 0 && err == nil {
+		h := frameHeader{
+			id:     s.id,
+			length: uint32(n),
+			flags:  flagWindowUpdate,
+		}
+		s.mux.bufferFrame(h, nil)
+	}
+
+	// Remove err if returning data. When Read encounters an error or
+	// end-of-file condition after successfully reading n > 0 bytes, it returns
+	// the number of bytes read. It will return the error (and n == 0) from a
+	// subsequent call.
+	if n > 0 {
+		err = nil
+	}
+
+	return
 }
 
 // Write writes data to the Stream.
@@ -201,8 +212,8 @@ func (s *Stream) Close() error {
 		return nil
 	}
 	s.err = ErrClosedStream
-	s.cond.Broadcast()
 	s.cond.L.Unlock()
+	s.cond.Broadcast()
 
 	h := frameHeader{
 		id:    s.id,
