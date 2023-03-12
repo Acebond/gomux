@@ -2,6 +2,7 @@ package gomux
 
 import (
 	"crypto/cipher"
+	"crypto/rand"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -52,30 +53,33 @@ func decodeFrameHeader(buf []byte) frameHeader {
 	return h
 }
 
-type frameReader struct {
-	reader  io.Reader
-	aead    cipher.AEAD
-	header  []byte
-	payload []byte
-}
+// nextFrame reads and decrypts a frame from reader
+func readFrame(reader io.Reader, aead cipher.AEAD, frameBuf []byte) (frameHeader, []byte, error) {
 
-// nextFrame reads a frame from reader
-func (fr *frameReader) nextFrame() (frameHeader, []byte, error) {
-	if _, err := io.ReadFull(fr.reader, fr.header); err != nil {
+	if _, err := io.ReadFull(reader, frameBuf[:frameHeaderSize]); err != nil {
 		return frameHeader{}, nil, fmt.Errorf("could not read frame header: %w", err)
 	}
-	h := decodeFrameHeader(fr.header)
+	h := decodeFrameHeader(frameBuf[:frameHeaderSize])
 
 	payloadSize := uint32(chacha20poly1305.Overhead)
 	if h.flags == flagData {
 		payloadSize += h.length
 	}
 
-	if _, err := io.ReadFull(fr.reader, fr.payload[:payloadSize]); err != nil {
+	if _, err := io.ReadFull(reader, frameBuf[frameHeaderSize:][:payloadSize]); err != nil {
 		return frameHeader{}, nil, fmt.Errorf("could not read frame payload: %w", err)
 	}
 
 	// Decrypt the message and check it wasn't tampered with.
-	_, err := fr.aead.Open(fr.payload[:0], h.nonce[:], fr.payload[:payloadSize], fr.header)
-	return h, fr.payload[:h.length], err
+	_, err := aead.Open(frameBuf[frameHeaderSize:][:0], h.nonce[:], frameBuf[frameHeaderSize:][:payloadSize], frameBuf[:frameHeaderSize])
+	return h, frameBuf[frameHeaderSize:][:h.length], err
+}
+
+// // writeFrame writs and encrypts a frame to writer
+func appendFrame(buf []byte, aead cipher.AEAD, h frameHeader, payload []byte) []byte {
+	rand.Read(h.nonce[:])
+	frame := buf[len(buf):][:frameHeaderSize+len(payload)+aead.Overhead()]
+	encodeFrameHeader(frame[:frameHeaderSize], h)
+	aead.Seal(frame[frameHeaderSize:][:0], h.nonce[:], payload, frame[:frameHeaderSize])
+	return buf[:len(buf)+len(frame)]
 }

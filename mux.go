@@ -2,7 +2,6 @@ package gomux
 
 import (
 	"crypto/cipher"
-	"crypto/rand"
 	"errors"
 	"net"
 	"sync"
@@ -50,14 +49,6 @@ type Mux struct {
 	sendBuf    []byte
 	writeBufA  []byte
 	writeBufB  []byte
-}
-
-func (m *Mux) appendFrame(buf []byte, h frameHeader, payload []byte) []byte {
-	rand.Read(h.nonce[:])
-	frame := buf[len(buf):][:frameHeaderSize+len(payload)+m.aead.Overhead()]
-	encodeFrameHeader(frame[:frameHeaderSize], h)
-	m.aead.Seal(frame[frameHeaderSize:][:0], h.nonce[:], payload, frame[:frameHeaderSize])
-	return buf[:len(buf)+len(frame)]
 }
 
 // setErr sets the Mux error and wakes up all Mux-related goroutines. If m.err
@@ -108,7 +99,7 @@ func (m *Mux) bufferFrame(h frameHeader, payload []byte) error {
 	}
 
 	// queue our frame
-	m.writeBuf = m.appendFrame(m.writeBuf, h, payload)
+	m.writeBuf = appendFrame(m.writeBuf, m.aead, h, payload)
 	// wake the writeLoop
 	m.writeCond.Signal()
 	// wake at most one bufferFrame call
@@ -120,7 +111,7 @@ func (m *Mux) bufferFrame(h frameHeader, payload []byte) error {
 // bufferFrame calls to fill m.writeBuf, then flushes the buffer to the
 // underlying connection. It also handles keepalives.
 func (m *Mux) writeLoop() {
-	// wake cond whenever a keepalive is due
+
 	keepaliveInterval := time.Minute * 10
 	nextKeepalive := time.Now().Add(keepaliveInterval)
 	timer := time.AfterFunc(keepaliveInterval, m.writeCond.Signal)
@@ -141,7 +132,7 @@ func (m *Mux) writeLoop() {
 		// NOTE: even if we were woken by the keepalive timer, there might be a
 		// normal frame ready to send, in which case we don't need a keepalive
 		if len(m.writeBuf) == 0 {
-			m.writeBuf = m.appendFrame(m.writeBuf[:0], frameHeader{flags: flagKeepalive}, nil)
+			m.writeBuf = appendFrame(m.writeBuf[:0], m.aead, frameHeader{flags: flagKeepalive}, nil)
 		}
 
 		// to avoid blocking bufferFrame while we Write, swap writeBufA and writeBufB
@@ -179,15 +170,10 @@ func (m *Mux) deleteStream(id uint32) {
 // Stream if none exists.
 func (m *Mux) readLoop() {
 
-	fr := &frameReader{
-		reader:  m.conn,
-		aead:    m.aead,
-		header:  make([]byte, frameHeaderSize),
-		payload: make([]byte, maxPayloadSize+m.aead.Overhead()),
-	}
+	frameBuf := make([]byte, maxFrameSize)
 
 	for {
-		h, payload, err := fr.nextFrame()
+		h, payload, err := readFrame(m.conn, m.aead, frameBuf)
 
 		if err != nil {
 			m.setErr(err)
