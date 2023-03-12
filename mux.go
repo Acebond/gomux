@@ -1,10 +1,15 @@
 package gomux
 
 import (
+	"crypto/cipher"
+	"crypto/rand"
 	"errors"
 	"net"
 	"sync"
 	"time"
+
+	"golang.org/x/crypto/blake2b"
+	"golang.org/x/crypto/chacha20poly1305"
 )
 
 // NOTE: This package makes heavy use of sync.Cond to manage concurrent streams
@@ -28,6 +33,7 @@ var (
 type Mux struct {
 	conn       net.Conn
 	acceptChan chan *Stream
+	aead       cipher.AEAD
 	mu         sync.Mutex // all subsequent fields are guarded by mu
 	writeCond  sync.Cond
 	bufferCond sync.Cond // separate cond for waking a single bufferFrame
@@ -38,6 +44,16 @@ type Mux struct {
 	sendBuf    []byte
 	writeBufA  []byte
 	writeBufB  []byte
+}
+
+func (m *Mux) appendFrame(buf []byte, h frameHeader, payload []byte) []byte {
+	rand.Read(h.nonce[:])
+	frame := buf[len(buf):][:frameHeaderSize+len(payload)+m.aead.Overhead()]
+	encodeFrameHeader(frame[:frameHeaderSize], h)
+	m.aead.Seal(frame[frameHeaderSize:][:0], h.nonce[:], payload, frame[:frameHeaderSize])
+	//log.Println(check)
+	// copy(frame[frameHeaderSize:], payload)
+	return buf[:len(buf)+len(frame)]
 }
 
 // setErr sets the Mux error and wakes up all Mux-related goroutines. If m.err
@@ -71,14 +87,15 @@ func (m *Mux) bufferFrame(h frameHeader, payload []byte) error {
 	defer m.mu.Unlock()
 
 	// block until we can add the frame to the buffer
-	for len(m.writeBuf)+frameHeaderSize+len(payload) > cap(m.writeBuf) && m.err == nil {
+	for len(m.writeBuf)+frameHeaderSize+len(payload)+m.aead.Overhead() > cap(m.writeBuf) && m.err == nil {
 		m.bufferCond.Wait()
 	}
 	if m.err != nil {
 		return m.err
 	}
+
 	// queue our frame and wake the writeLoop
-	m.writeBuf = appendFrame(m.writeBuf, h, payload)
+	m.writeBuf = m.appendFrame(m.writeBuf, h, payload)
 	m.writeCond.Signal()
 
 	// wake at most one bufferFrame call
@@ -111,7 +128,7 @@ func (m *Mux) writeLoop() {
 		// NOTE: even if we were woken by the keepalive timer, there might be a
 		// normal frame ready to send, in which case we don't need a keepalive
 		if len(m.writeBuf) == 0 {
-			m.writeBuf = appendFrame(m.writeBuf[:0], frameHeader{flags: flagKeepalive}, nil)
+			m.writeBuf = m.appendFrame(m.writeBuf[:0], frameHeader{flags: flagKeepalive}, nil)
 		}
 
 		// to avoid blocking bufferFrame while we Write, swap writeBufA and writeBufB
@@ -152,11 +169,11 @@ func (m *Mux) readLoop() {
 	fr := &frameReader{
 		reader:  m.conn,
 		header:  make([]byte, frameHeaderSize),
-		payload: make([]byte, maxPayloadSize),
+		payload: make([]byte, maxPayloadSize+m.aead.Overhead()),
 	}
 
 	for {
-		h, payload, err := fr.nextFrame()
+		h, payload, err := fr.nextFrame(m.aead)
 
 		if err != nil {
 			m.setErr(err)
@@ -234,7 +251,7 @@ func (m *Mux) OpenStream() (*Stream, error) {
 }
 
 // newMux initializes a Mux and spawns its readLoop and writeLoop goroutines.
-func newMux(conn net.Conn) *Mux {
+func newMux(conn net.Conn, psk string) *Mux {
 	m := &Mux{
 		conn:       conn,
 		streams:    make(map[uint32]*Stream),
@@ -247,6 +264,14 @@ func newMux(conn net.Conn) *Mux {
 	// both conds use the same mutex
 	m.writeCond.L = &m.mu
 	m.bufferCond.L = &m.mu
+
+	key := blake2b.Sum256([]byte(psk))
+	var err error
+	m.aead, err = chacha20poly1305.NewX(key[:])
+	if err != nil {
+		panic(err)
+	}
+
 	go m.readLoop()
 	go m.writeLoop()
 	return m
@@ -255,13 +280,13 @@ func newMux(conn net.Conn) *Mux {
 // Client creates and initializes a new client-side Mux on the provided conn.
 // Client takes overship of the conn.
 func Client(conn net.Conn) (*Mux, error) {
-	return newMux(conn), nil
+	return newMux(conn, "test"), nil
 }
 
 // Server creates and initializes a new server-side Mux on the provided conn.
 // Server takes overship of the conn.
 func Server(conn net.Conn) (*Mux, error) {
-	m := newMux(conn)
+	m := newMux(conn, "test")
 	m.nextID++ // avoid collisions with client peer
 	return m, nil
 }
