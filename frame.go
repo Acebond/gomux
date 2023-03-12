@@ -19,6 +19,7 @@ type frameHeader struct {
 const (
 	frameHeaderSize = 4 + 2 + 2 + chacha20poly1305.NonceSizeX
 	maxPayloadSize  = 1 << 16 // must be < 2 ^ 24
+	//aeadOverhead    uint = chacha20poly1305.Overhead
 	maxFrameSize    = frameHeaderSize + maxPayloadSize + chacha20poly1305.Overhead
 	writeBufferSize = maxFrameSize * 10 // must be >= maxFrameSize
 	windowSize      = maxPayloadSize    // must be >= maxPayloadSize
@@ -53,36 +54,28 @@ func decodeFrameHeader(buf []byte) frameHeader {
 
 type frameReader struct {
 	reader  io.Reader
+	aead    cipher.AEAD
 	header  []byte
 	payload []byte
 }
 
 // nextFrame reads a frame from reader
-func (fr *frameReader) nextFrame(aead cipher.AEAD) (frameHeader, []byte, error) {
+func (fr *frameReader) nextFrame() (frameHeader, []byte, error) {
 	if _, err := io.ReadFull(fr.reader, fr.header); err != nil {
 		return frameHeader{}, nil, fmt.Errorf("could not read frame header: %w", err)
 	}
 	h := decodeFrameHeader(fr.header)
 
-	payloadSize := aead.Overhead()
+	payloadSize := uint32(chacha20poly1305.Overhead)
 	if h.flags == flagData {
-		payloadSize += int(h.length)
+		payloadSize += h.length
 	}
-
-	//if h.length > maxPayloadSize {
-	//	return frameHeader{}, nil, fmt.Errorf("header length (%v) > maxPayloadSize (%v)", h.length, maxPayloadSize)
-	//}
 
 	if _, err := io.ReadFull(fr.reader, fr.payload[:payloadSize]); err != nil {
 		return frameHeader{}, nil, fmt.Errorf("could not read frame payload: %w", err)
 	}
-	//return h, fr.payload[:h.length], nil
 
 	// Decrypt the message and check it wasn't tampered with.
-	_, err := aead.Open(fr.payload[:0], h.nonce[:], fr.payload[:payloadSize], fr.header)
-	if err != nil {
-		panic(err)
-	}
-
-	return h, fr.payload[:h.length], nil
+	_, err := fr.aead.Open(fr.payload[:0], h.nonce[:], fr.payload[:payloadSize], fr.header)
+	return h, fr.payload[:h.length], err
 }

@@ -168,12 +168,13 @@ func (m *Mux) readLoop() {
 
 	fr := &frameReader{
 		reader:  m.conn,
+		aead:    m.aead,
 		header:  make([]byte, frameHeaderSize),
 		payload: make([]byte, maxPayloadSize+m.aead.Overhead()),
 	}
 
 	for {
-		h, payload, err := fr.nextFrame(m.aead)
+		h, payload, err := fr.nextFrame()
 
 		if err != nil {
 			m.setErr(err)
