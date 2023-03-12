@@ -88,18 +88,20 @@ func (m *Mux) setErr(err error) error {
 // early with an error if m.err is set.
 func (m *Mux) bufferFrame(h frameHeader, payload []byte) error {
 	m.writeMutex.Lock()
-	defer m.writeMutex.Unlock()
 
 	// block until we can add the frame to the buffer
 	for len(m.writeBuf)+frameHeaderSize+len(payload)+chacha20poly1305.Overhead > cap(m.writeBuf) && m.writeErr == nil {
 		m.bufferCond.Wait()
 	}
 	if m.writeErr != nil {
+		m.writeMutex.Unlock()
 		return m.writeErr
 	}
 
 	// queue our frame
 	m.writeBuf = appendFrame(m.writeBuf, m.aead, h, payload)
+	m.writeMutex.Unlock()
+
 	// wake the writeLoop
 	m.writeCond.Signal()
 	// wake at most one bufferFrame call
@@ -137,8 +139,8 @@ func (m *Mux) writeLoop() {
 
 		// to avoid blocking bufferFrame while we Write, swap writeBufA and writeBufB
 		m.writeBuf, m.sendBuf = m.sendBuf, m.writeBuf
-
 		m.writeMutex.Unlock()
+
 		// wake at most one bufferFrame call
 		m.bufferCond.Signal()
 
@@ -220,7 +222,7 @@ func (m *Mux) Close() error {
 	m.writeMutex.Unlock()
 	err := m.setErr(ErrClosedConn)
 	if err == ErrClosedConn {
-		err = nil
+		return nil
 	}
 	return err
 }

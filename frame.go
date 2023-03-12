@@ -20,7 +20,6 @@ type frameHeader struct {
 const (
 	frameHeaderSize = 4 + 2 + 2 + chacha20poly1305.NonceSizeX
 	maxPayloadSize  = 1 << 16 // must be < 2 ^ 24
-	//aeadOverhead    uint = chacha20poly1305.Overhead
 	maxFrameSize    = frameHeaderSize + maxPayloadSize + chacha20poly1305.Overhead
 	writeBufferSize = maxFrameSize * 10 // must be >= maxFrameSize
 	windowSize      = maxPayloadSize    // must be >= maxPayloadSize
@@ -75,7 +74,7 @@ func readFrame(reader io.Reader, aead cipher.AEAD, frameBuf []byte) (frameHeader
 	return h, frameBuf[frameHeaderSize:][:h.length], err
 }
 
-// // writeFrame writs and encrypts a frame to writer
+// appendFrame writs and encrypts a frame to buf
 func appendFrame(buf []byte, aead cipher.AEAD, h frameHeader, payload []byte) []byte {
 	rand.Read(h.nonce[:])
 	frame := buf[len(buf):][:frameHeaderSize+len(payload)+aead.Overhead()]
