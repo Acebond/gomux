@@ -9,7 +9,6 @@ import (
 	"os"
 	"runtime/debug"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -151,8 +150,8 @@ func TestMux(t *testing.T) {
 	}
 	// all streams should have been deleted
 	time.Sleep(time.Millisecond * 100)
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	m.readMutex.Lock()
+	defer m.readMutex.Unlock()
 	if len(m.streams) != 0 {
 		t.Error("streams not closed")
 	}
@@ -210,8 +209,8 @@ func TestManyStreams(t *testing.T) {
 
 	// all streams should have been deleted
 	time.Sleep(time.Millisecond * 100)
-	m1.mu.Lock()
-	defer m1.mu.Unlock()
+	m1.readMutex.Lock()
+	defer m1.readMutex.Unlock()
 	if len(m1.streams) != 0 {
 		t.Error("streams not closed:", len(m1.streams))
 	}
@@ -320,23 +319,6 @@ func TestDeadline(t *testing.T) {
 	} else if err := <-serverCh; err != nil && err != ErrPeerClosedConn && err != ErrPeerClosedStream {
 		t.Fatal(err)
 	}
-}
-
-type statsConn struct {
-	r, w int32
-	net.Conn
-}
-
-func (c *statsConn) Read(b []byte) (int, error) {
-	n, err := c.Conn.Read(b)
-	atomic.AddInt32(&c.r, int32(n))
-	return n, err
-}
-
-func (c *statsConn) Write(b []byte) (int, error) {
-	n, err := c.Conn.Write(b)
-	atomic.AddInt32(&c.w, int32(n))
-	return n, err
 }
 
 func BenchmarkMux(b *testing.B) {

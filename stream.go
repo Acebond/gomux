@@ -29,7 +29,7 @@ func newStream(id uint32, m *Mux) *Stream {
 		mux:        m,
 		id:         id,
 		cond:       sync.Cond{L: new(sync.Mutex)},
-		err:        m.err,
+		err:        m.readErr,
 		windowSize: windowSize,
 		readBuf:    ringbuffer.NewBuffer(windowSize),
 	}
