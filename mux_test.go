@@ -29,10 +29,7 @@ func newTestingPair(tb testing.TB) (dialed, accepted *Mux) {
 		if err != nil {
 			errChanServer <- err
 		}
-		accepted, err = Server(conn)
-		if err != nil {
-			errChanServer <- err
-		}
+		accepted = Server(conn, "test")
 		close(errChanServer)
 		wg.Done()
 	}()
@@ -42,10 +39,7 @@ func newTestingPair(tb testing.TB) (dialed, accepted *Mux) {
 		if err != nil {
 			errChanClient <- err
 		}
-		dialed, err = Client(conn)
-		if err != nil {
-			errChanClient <- err
-		}
+		dialed = Client(conn, "test")
 		close(errChanClient)
 		wg.Done()
 	}()
@@ -95,10 +89,7 @@ func TestMux(t *testing.T) {
 			if err != nil {
 				return err
 			}
-			m, err := Server(conn)
-			if err != nil {
-				return err
-			}
+			m := Server(conn, "test")
 			defer m.Close()
 			s, err := m.AcceptStream()
 			if err != nil {
@@ -121,10 +112,7 @@ func TestMux(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m, err := Client(conn)
-	if err != nil {
-		t.Fatal(err)
-	}
+	m := Client(conn, "test")
 	defer m.Close()
 	s, err := m.OpenStream()
 	if err != nil {

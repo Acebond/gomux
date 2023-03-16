@@ -275,12 +275,12 @@ func newMux(conn net.Conn, startID uint32, psk string) *Mux {
 
 // Client creates and initializes a new client-side Mux on the provided conn.
 // Client takes overship of the conn.
-func Client(conn net.Conn) (*Mux, error) {
-	return newMux(conn, 0, "test"), nil
+func Client(conn net.Conn, psk string) *Mux {
+	return newMux(conn, 0, psk)
 }
 
 // Server creates and initializes a new server-side Mux on the provided conn.
 // Server takes overship of the conn.
-func Server(conn net.Conn) (*Mux, error) {
-	return newMux(conn, 1, "test"), nil
+func Server(conn net.Conn, psk string) *Mux {
+	return newMux(conn, 1, psk)
 }
