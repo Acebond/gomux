@@ -1,6 +1,6 @@
 # Gomux
 
-Gomux is a high-performance stream multiplexer inspired from [SiaMux](https://github.com/SiaFoundation/mux). It allows you to operate many distinct bidirectional streams on top of a single underlying connection.
+Gomux is a high-performance stream multiplexer inspired from [SiaMux](https://github.com/SiaFoundation/mux). It allows you to operate many distinct bidirectional streams on top of a single underlying connection. It transparently encrypts all data using XChaCha20-Poly1305 with a pre-shared key.
 
 ## Specification
 
