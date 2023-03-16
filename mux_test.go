@@ -76,7 +76,7 @@ func handleStreams(m *Mux, fn func(*Stream) error) chan error {
 }
 
 func TestMux(t *testing.T) {
-	l, err := net.Listen("tcp", ":0")
+	l, err := net.Listen("tcp", "127.0.0.1:60000")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,7 +108,7 @@ func TestMux(t *testing.T) {
 		}()
 	}()
 
-	conn, err := net.Dial("tcp", l.Addr().String())
+	conn, err := net.Dial("tcp", "127.0.0.1:60000")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -356,7 +356,7 @@ func BenchmarkMux(b *testing.B) {
 
 // benchmark throughput of raw TCP conn
 func BenchmarkConn(b *testing.B) {
-	l, err := net.Listen("tcp", ":0")
+	l, err := net.Listen("tcp", "127.0.0.1:60000")
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -384,7 +384,7 @@ func BenchmarkConn(b *testing.B) {
 		}
 	}()
 
-	conn, err := net.Dial("tcp", l.Addr().String())
+	conn, err := net.Dial("tcp", "127.0.0.1:60000")
 	if err != nil {
 		b.Fatal(err)
 	}
