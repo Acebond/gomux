@@ -24,6 +24,7 @@ func newTestingPair(tb testing.TB) (dialed, accepted *Mux) {
 		l, err := net.Listen("tcp", "127.0.0.1:60000")
 		if err != nil {
 			errChanServer <- err
+			return
 		}
 		conn, err := l.Accept()
 		if err != nil {
