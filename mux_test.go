@@ -26,9 +26,11 @@ func newTestingPair(tb testing.TB) (dialed, accepted *Mux) {
 			errChanServer <- err
 			return
 		}
+		defer l.Close()
 		conn, err := l.Accept()
 		if err != nil {
 			errChanServer <- err
+			return
 		}
 		accepted = Server(conn, "test")
 		close(errChanServer)
@@ -39,6 +41,7 @@ func newTestingPair(tb testing.TB) (dialed, accepted *Mux) {
 		conn, err := net.Dial("tcp", "127.0.0.1:60000")
 		if err != nil {
 			errChanClient <- err
+			return
 		}
 		dialed = Client(conn, "test")
 		close(errChanClient)
