@@ -172,7 +172,7 @@ func (m *Mux) deleteStream(id uint32) {
 // Stream if none exists.
 func (m *Mux) readLoop() {
 
-	frameBuf := make([]byte, maxFrameSize)
+	frameBuf := make([]byte, maxPayloadSize+chacha20poly1305.Overhead)
 
 	for {
 		h, payload, err := readFrame(m.conn, m.aead, frameBuf)

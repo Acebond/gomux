@@ -1,6 +1,7 @@
 package gomux
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -173,12 +174,16 @@ func TestManyStreams(t *testing.T) {
 			}
 			defer s.Close()
 			msg := fmt.Sprintf("hello, %v!", i)
+
+			//msg := make([]byte, 500)
+			//bytes.Repeat(msg, cap(msg))
+
 			buf := make([]byte, len(msg))
 			if _, err := s.Write([]byte(msg)); err != nil {
 				errChan <- err
 			} else if _, err := io.ReadFull(s, buf); err != nil {
 				errChan <- err
-			} else if string(buf) != msg {
+			} else if !bytes.Equal([]byte(msg), buf) {
 				errChan <- err
 			} else if err := s.Close(); err != nil {
 				errChan <- err
